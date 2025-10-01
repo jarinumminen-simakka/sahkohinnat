@@ -1,0 +1,139 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pörssisähkön vartit – nyt + 3</title>
+<style>
+  html, body {
+    background:#000; color:#fff; margin:0;
+    font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell;
+  }
+  header, footer {
+    text-align:center; padding:12px; color:#ddd;
+  }
+  .container { max-width:1200px; margin:0 auto; }
+  .row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:16px 24px; border-bottom:1px solid #111;
+  }
+  .row.now { font-size:64px; }
+  .row.next { font-size:48px; color:#eee; }
+  .time { letter-spacing:0.5px; }
+  .price { font-variant-numeric: tabular-nums; }
+  /* Värikoodaus hinnan mukaan */
+  .cheap .price { color:#8f8; }   /* < 5 c/kWh */
+  .ok    .price { color:#fff; }   /* 5–10 */
+  .high  .price { color:#fc6; }   /* 10–20 */
+  .spike .price { color:#f77; }   /* ≥ 20 */
+  /* Countdown */
+  #countdown { font-weight:600; margin-left:8px; color:#9cf; }
+</style>
+
+<header id="hdr" class="container"></header>
+<div id="list" class="container"></div>
+<footer class="container">Lähde: sahkotin.fi (Nord Pool) • Päivittyy minuutin välein</footer>
+
+<script>
+const tz  = "Europe/Helsinki";
+const api = "https://sahkotin.fi/prices";
+
+/*** Aika-apurit ***/
+function toIsoZ(d){
+  const z = new Date(Math.floor(d.getTime()/1000)*1000);
+  return z.toISOString().replace(/\.\d{3}Z$/, ".000Z");
+}
+function floorToQuarter(d){
+  const r = new Date(d);
+  r.setSeconds(0,0);
+  r.setMinutes(Math.floor(r.getMinutes()/15)*15);
+  return r;
+}
+function ceilToQuarter(d){
+  const f = floorToQuarter(d);
+  if (d.getSeconds()===0 && d.getMilliseconds()===0 && d.getMinutes()%15===0) return d;
+  return new Date(f.getTime() + 15*60*1000);
+}
+function roundToQuarterLocal(d){
+  const m = Math.floor(d.getMinutes()/15)*15;
+  const r = new Date(d); r.setMinutes(0,0,0); r.setMinutes(m); return r;
+}
+function fmtTimeHelsinki(date){
+  return new Intl.DateTimeFormat('fi-FI', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(date);
+}
+function fmtDateHelsinki(date){
+  return new Intl.DateTimeFormat('fi-FI', { timeZone: tz, day:'2-digit', month:'2-digit', year:'numeric' }).format(date);
+}
+function priceClass(v){
+  if (isNaN(v)) return "";
+  if (v < 5)  return "cheap";
+  if (v < 10) return "ok";
+  if (v < 20) return "high";
+  return "spike";
+}
+
+/*** Hae ja näytä hinnat ***/
+async function load(){
+  const now   = new Date();
+  const start = floorToQuarter(new Date(now.getTime() - 60*60*1000));
+  const end   = ceilToQuarter(new Date(now.getTime() + 2*60*60*1000));
+  const url   = api + "?quarter&fix&vat&start=" + toIsoZ(start) + "&end=" + toIsoZ(end);
+
+  const res   = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return;
+
+  const data   = await res.json();
+  const prices = (data.prices||[]).map(p=>({ ts:new Date(p.date), val:Number(p.value) }))
+                                  .sort((a,b)=>a.ts-b.ts);
+
+  if (prices.length === 0) return;
+
+  // Etsi nykyinen vartti
+  const quarterMs = 15*60*1000;
+  const nowUtc    = new Date();
+  let idx = prices.findIndex(p=>nowUtc >= p.ts && nowUtc < new Date(p.ts.getTime()+quarterMs));
+  if (idx < 0) idx = 0;
+
+  // Ota 4 riviä
+  let four = prices.slice(idx, idx+4);
+  if (four.length < 4 && idx > 0) {
+    const need = 4 - four.length;
+    four = prices.slice(Math.max(0, idx-need), idx).concat(four);
+  }
+
+  // Päivitä header
+  const hdr = document.getElementById("hdr");
+  hdr.innerHTML = 'Tänään ' + fmtDateHelsinki(now) +
+                  ' | Nyt: ' + fmtTimeHelsinki(roundToQuarterLocal(now)) +
+                  ' <span id="countdown"></span>';
+
+  // Päivitä rivit
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  four.forEach((p,i)=>{
+    const row = document.createElement("div");
+    row.className = "row " + (i===0 ? "now" : "next") + " " + priceClass(p.val);
+    row.innerHTML = '<div class="time">' + fmtTimeHelsinki(p.ts) + '</div>' +
+                    '<div class="price">' + p.val.toFixed(3) + ' c/kWh</div>';
+    list.appendChild(row);
+  });
+}
+
+/*** Countdown seuraavaan varttiin ***/
+function updateCountdown(){
+  const el = document.getElementById("countdown");
+  if (!el) return;
+  const now = new Date();
+  const nq  = ceilToQuarter(new Date(now));
+  let ms    = nq - now; if (ms<0) ms=0;
+  const s   = Math.floor(ms/1000);
+  const mm  = String(Math.floor(s/60)).padStart(2,'0');
+  const ss  = String(s%60).padStart(2,'0');
+  el.textContent = "→ seuraava vartti " + mm + ":" + ss;
+}
+
+/*** Käynnistys ***/
+document.addEventListener("DOMContentLoaded", ()=>{
+  load();
+  setInterval(load, 60*1000);
+  updateCountdown();
+  setInterval(updateCountdown, 250);
+});
+</script>
