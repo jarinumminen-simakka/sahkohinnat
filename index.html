@@ -1,31 +1,30 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Pörssisähkö – vartit / 12h tuntikeskiarvo</title>
+<title>Pörssisähkö – vartit / 12h tuntikeskiarvo (legacy)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  html, body { background:#000; color:#fff; margin:0;
-    font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell; }
+  html, body { background:#000; color:#fff; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, sans-serif; }
   header, footer { text-align:center; padding:12px; color:#ddd; }
   .container { max-width:1200px; margin:0 auto; }
   .bar { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
-  .row { display:flex; justify-content:space-between; align-items:center;
-         padding:16px 24px; border-bottom:1px solid #111; transition:background .15s ease; }
+  .row { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; border-bottom:1px solid #111; transition:background .15s ease; }
   .row.now { font-size:64px; }
   .row.next { font-size:48px; color:#eee; }
   .time { letter-spacing:0.5px; }
   .price { font-variant-numeric: tabular-nums; }
-  /* Värikoodaus hinnan mukaan */
+  /* värikoodaus */
   .cheap .price { color:#8f8; }   /* < 5 c/kWh */
   .ok    .price { color:#fff; }   /* 5–10 */
   .high  .price { color:#fc6; }   /* 10–20 */
   .spike .price { color:#f77; }   /* ≥ 20 */
-  /* Korostus halvimmalle jaksolla */
+  /* korostus halvimmalle jaksolla */
   .highlight { background:#0f1a10; outline:2px solid #3fa73f; }
   .highlight .price { font-weight:700; }
-  /* Countdown */
+  /* countdown */
   #countdown { font-weight:600; margin-left:8px; color:#9cf; }
-  /* Painikkeet */
+  /* painikkeet */
   #toggle, .spanbtn {
-    appearance:none; border:1px solid #333; background:#111; color:#eee;
+    -webkit-appearance:none; appearance:none; border:1px solid #333; background:#111; color:#eee;
     padding:8px 14px; border-radius:10px; cursor:pointer; font-size:14px;
   }
   #toggle:hover, .spanbtn:hover { background:#151515; }
@@ -61,47 +60,35 @@
 
 <script>
 /*** Asetukset ***/
-const tz  = "Europe/Helsinki";
-const api = "https://sahkotin.fi/prices";
+var api = "https://sahkotin.fi/prices";
 
-/*** Aika-apurit ***/
+/*** Yleiset apurit (ILMAN Intl timeZonea) ***/
+function pad2(n){ return (n<10 ? "0"+n : ""+n); }
+function formatHHMMLocal(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
+function formatDateLocal(d){ return pad2(d.getDate()) + "." + pad2(d.getMonth()+1) + "." + d.getFullYear(); }
 function toIsoZ(d){
-  const z = new Date(Math.floor(d.getTime()/1000)*1000);
+  // pyöristä ms → .000Z
+  var z = new Date(Math.floor(d.getTime()/1000)*1000);
   return z.toISOString().replace(/\.\d{3}Z$/, ".000Z");
 }
-function floorToQuarter(d){
-  const r = new Date(d); r.setSeconds(0,0);
+function floorToQuarterLocal(d){
+  var r = new Date(d.getTime());
+  r.setSeconds(0,0);
   r.setMinutes(Math.floor(r.getMinutes()/15)*15);
   return r;
 }
-function ceilToQuarter(d){
-  const f = floorToQuarter(d);
+function ceilToQuarterLocal(d){
+  var f = floorToQuarterLocal(d);
   if (d.getSeconds()===0 && d.getMilliseconds()===0 && d.getMinutes()%15===0) return d;
   return new Date(f.getTime() + 15*60*1000);
 }
-
-/* Formatterit */
-const fmtHHMM = new Intl.DateTimeFormat('fi-FI', { timeZone: tz, hour:'2-digit', minute:'2-digit', hour12:false });
-const fmtDate = new Intl.DateTimeFormat('fi-FI', { timeZone: tz, day:'2-digit', month:'2-digit', year:'numeric' });
-const fmtPartsHour = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', hour12:false });
-function formatHHMM(date){ return fmtHHMM.format(date); }
-function formatDate(date){ return fmtDate.format(date); }
-function hourKey(date){ // YYYY-MM-DDTHH (Helsinki)
-  const parts = fmtPartsHour.formatToParts(date);
-  let y="", m="", d="", h="";
-  for (const p of parts){
-    if (p.type==='year')  y=p.value;
-    else if (p.type==='month') m=p.value;
-    else if (p.type==='day')   d=p.value;
-    else if (p.type==='hour')  h=p.value;
-  }
-  return `${y}-${m}-${d}T${h}`;
+function floorToHourLocal(d){
+  var r = new Date(d.getTime());
+  r.setMinutes(0,0,0);
+  return r;
 }
-function hourLabelFromKey(key){ return (key.split('T')[1] || "--") + ':00'; }
-
-/*** Väriluokka hinnalle ***/
 function priceClass(v){
-  if (!Number.isFinite(v)) return "";
+  if (!isFinite(v)) return "";
   if (v < 5)  return "cheap";
   if (v < 10) return "ok";
   if (v < 20) return "high";
@@ -109,150 +96,166 @@ function priceClass(v){
 }
 
 /*** Tila ***/
-let viewMode = "quarters";       // "quarters" | "hours"
-let cheapestSpan = 1;            // 1 | 2 | 3 (12h-näkymän halvin peräkkäinen jakso)
-let loadInterval = null;
-let countdownInterval = null;
+var viewMode = "quarters";   // "quarters" | "hours"
+var cheapestSpan = 1;        // 1 | 2 | 3
+var loadInterval = null;
+var countdownInterval = null;
 
-/*** Countdown seuraavaan varttiin ***/
+/*** Countdown (paikallinen vartti) ***/
 function updateCountdown(){
-  const el = document.getElementById("countdown");
+  var el = document.getElementById("countdown");
   if (!el) return;
-  const now = new Date();
-  const nq  = ceilToQuarter(new Date(now));
-  let ms    = nq - now; if (ms<0) ms=0;
-  const s   = Math.floor(ms/1000);
-  el.textContent = "→ seuraava vartti " +
-    String(Math.floor(s/60)).padStart(2,'0') + ":" +
-    String(s%60).padStart(2,'0');
+  var now = new Date();
+  var nq  = ceilToQuarterLocal(new Date(now.getTime()));
+  var ms  = nq - now; if (ms<0) ms=0;
+  var s   = Math.floor(ms/1000);
+  el.textContent = "→ seuraava vartti " + pad2(Math.floor(s/60)) + ":" + pad2(s%60);
 }
 
-/*** Hae ja näytä: vartit (nyt + 3) ***/
+/*** VARTTINÄKYMÄ (nyt + 3) ***/
 async function renderQuarters(){
-  const now   = new Date();
-  const start = floorToQuarter(new Date(now.getTime() - 60*60*1000)); // -1h
-  const end   = ceilToQuarter(new Date(now.getTime() + 2*60*60*1000)); // +2h
-  const url   = api + "?quarter&fix&vat&start=" + toIsoZ(start) + "&end=" + toIsoZ(end);
+  var now   = new Date();
+  // haetaan -1h..+2h UTC:na: käytetään Date → ISO (UTC) – ok kaikissa selaimissa
+  var start = new Date(now.getTime() - 60*60*1000);
+  var end   = new Date(now.getTime() + 2*60*60*1000);
+  start = floorToQuarterLocal(start);
+  end   = ceilToQuarterLocal(end);
+  var url   = api + "?quarter&fix&vat&start=" + toIsoZ(start) + "&end=" + toIsoZ(end);
 
-  const res   = await fetch(url, { cache: "no-store" });
+  var res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return;
-  const data   = await res.json();
-  const prices = (data.prices||[])
-    .map(p=>({ ts:new Date(p.date), val:Number(p.value) }))
-    .sort((a,b)=>a.ts-b.ts);
-  if (prices.length === 0) return;
+  var data = await res.json();
+  var prices = (data.prices||[]).map(function(p){
+    return { ts: new Date(p.date), val: Number(p.value) };
+  }).sort(function(a,b){ return a.ts - b.ts; });
+  if (!prices.length) return;
 
-  const quarterMs = 15*60*1000;
-  const nowUtc    = new Date();
-  let idx = prices.findIndex(p => nowUtc >= p.ts && nowUtc < new Date(p.ts.getTime()+quarterMs));
+  // Etsi nykyinen vartti (verrataan UTC-objekteja, ok)
+  var quarterMs = 15*60*1000;
+  var nowUtc = new Date();
+  var idx = -1;
+  for (var i=0;i<prices.length;i++){
+    var s = prices[i].ts, e = new Date(s.getTime()+quarterMs);
+    if (nowUtc >= s && nowUtc < e){ idx = i; break; }
+  }
   if (idx < 0) idx = 0;
 
-  let four = prices.slice(idx, idx+4);
-  if (four.length < 4 && idx > 0) {
-    const need = 4 - four.length;
+  var four = prices.slice(idx, idx+4);
+  if (four.length < 4 && idx > 0){
+    var need = 4 - four.length;
     four = prices.slice(Math.max(0, idx-need), idx).concat(four);
   }
 
-  const titleLine = document.getElementById("titleLine");
-  titleLine.innerHTML = 'Tänään ' + formatDate(now) +
-                        ' | Nyt: ' + formatHHMM(floorToQuarter(now)) +
+  // otsikko
+  var titleLine = document.getElementById("titleLine");
+  titleLine.innerHTML = 'Tänään ' + formatDateLocal(now) +
+                        ' | Nyt: ' + formatHHMMLocal(floorToQuarterLocal(now)) +
                         ' <span id="countdown"></span>';
 
-  const list = document.getElementById("list");
+  // rivit (näytetään paikallisena aikana)
+  var list = document.getElementById("list");
   list.innerHTML = "";
-  four.forEach((p,i)=>{
-    const row = document.createElement("div");
-    row.className = "row " + (i===0 ? "now" : "next") + " " + priceClass(p.val);
-    row.innerHTML =
-      '<div class="time">' + formatHHMM(p.ts) + '</div>' +
-      '<div class="price">' + p.val.toFixed(3) + ' c/kWh</div>';
+  for (var k=0;k<four.length;k++){
+    var p = four[k];
+    var row = document.createElement("div");
+    row.className = "row " + (k===0 ? "now" : "next") + " " + priceClass(p.val);
+    var localTs = new Date(p.ts.getTime()); // Date-getters ovat lokaaleja
+    row.innerHTML = '<div class="time">' + formatHHMMLocal(localTs) + '</div>' +
+                    '<div class="price">' + p.val.toFixed(3) + ' c/kWh</div>';
     list.appendChild(row);
-  });
+  }
 }
 
-/*** Hae ja näytä: 12 tunnin tuntikeskiarvot + halvin peräkkäinen jakso ***/
+/*** 12H TUNTIKESKIARVO + HALVIN JAKSO ***/
 async function renderHourly12h(){
-  const base = new Date(); base.setMinutes(0,0,0); // tämän kellotunnin alku
-  // tee 12 tunnin "bucketlist" (avaimet + labelit Helsinki-ajassa)
-  const hours = Array.from({length:12}, (_,h)=>{
-    const d = new Date(base.getTime() + h*60*60*1000);
-    const key = hourKey(d);
-    return { key, label: hourLabelFromKey(key) };
-  });
+  // perusta: tämän kellotunnin alku laitteen paikallisaikana
+  var base = floorToHourLocal(new Date());
 
-  // Hae ikkunan vartit
-  const windowStart = floorToQuarter(new Date(base));
-  const windowEnd   = ceilToQuarter(new Date(base.getTime() + 12*60*60*1000));
-  const url         = api + "?quarter&fix&vat&start=" + toIsoZ(windowStart) + "&end=" + toIsoZ(windowEnd);
-
-  const res   = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return;
-  const data     = await res.json();
-  const quarters = (data.prices||[])
-    .map(p=>({ ts:new Date(p.date), val:Number(p.value) }))
-    .sort((a,b)=>a.ts-b.ts);
-  if (quarters.length === 0) return;
-
-  // Aggretoi tuntiavaimella (Helsinki-aika)
-  const agg = new Map(); // key -> {sum, count}
-  for (const q of quarters){
-    const k = hourKey(q.ts);
-    if (!k) continue;
-    const a = agg.get(k) || { sum:0, count:0 };
-    a.sum += q.val; a.count += 1;
-    agg.set(k, a);
+  // luo 12h bucket-lista (label + key) paikallisen ajan perusteella
+  var hours = [];
+  for (var h=0; h<12; h++){
+    var d = new Date(base.getTime() + h*60*60*1000);
+    var key = d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()) + "T" + pad2(d.getHours());
+    hours.push({ key: key, label: pad2(d.getHours()) + ":00" });
   }
 
-  // Rakenna bucketit järjestyksessä
-  const buckets = hours.map(h=>{
-    const a = agg.get(h.key);
-    const avg = (a && a.count) ? (a.sum / a.count) : NaN;
-    return { key:h.key, label:h.label, avg };
-  });
+  // Hae vartit kattamaan ikkunan
+  var windowStart = floorToQuarterLocal(new Date(base.getTime()));
+  var windowEnd   = ceilToQuarterLocal(new Date(base.getTime() + 12*60*60*1000));
+  var url         = api + "?quarter&fix&vat&start=" + toIsoZ(windowStart) + "&end=" + toIsoZ(windowEnd);
 
-  // Laske halvin peräkkäinen jakso pituudella cheapestSpan (1–3)
-  let bestStart = -1, bestSum = Infinity;
-  const K = Math.max(1, Math.min(3, cheapestSpan));
-  for (let i=0; i+K-1 < buckets.length; i++){
-    let sum = 0, ok = true;
-    for (let j=0; j<K; j++){
-      const v = buckets[i+j].avg;
-      if (!Number.isFinite(v)){ ok = false; break; }
+  var res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return;
+  var data = await res.json();
+  var quarters = (data.prices||[]).map(function(p){
+    return { ts: new Date(p.date), val: Number(p.value) };
+  }).sort(function(a,b){ return a.ts - b.ts; });
+  if (!quarters.length) return;
+
+  // Aggretoi tuntiavaimella paikallisesti
+  var agg = {}; // key -> {sum, count}
+  for (var q=0; q<quarters.length; q++){
+    var ts = new Date(quarters[q].ts.getTime()); // Date-getters paikallisia
+    var key = ts.getFullYear() + "-" + pad2(ts.getMonth()+1) + "-" + pad2(ts.getDate()) + "T" + pad2(ts.getHours());
+    if (!agg[key]) agg[key] = { sum:0, count:0 };
+    agg[key].sum += quarters[q].val;
+    agg[key].count += 1;
+  }
+
+  // Muodosta bucketit järjestyksessä
+  var buckets = [];
+  for (var i=0;i<hours.length;i++){
+    var k = hours[i].key;
+    var a = agg[k];
+    var avg = (a && a.count) ? (a.sum / a.count) : NaN;
+    buckets.push({ key:k, label:hours[i].label, avg:avg });
+  }
+
+  // Halvin peräkkäinen jakso pituudella cheapestSpan
+  var K = Math.max(1, Math.min(3, cheapestSpan));
+  var bestStart = -1, bestSum = Infinity;
+  for (var s=0; s+K-1<buckets.length; s++){
+    var sum = 0, ok = true;
+    for (var j=0;j<K;j++){
+      var v = buckets[s+j].avg;
+      if (!isFinite(v)){ ok=false; break; }
       sum += v;
     }
-    if (ok && sum < bestSum){ bestSum = sum; bestStart = i; }
+    if (ok && sum < bestSum){ bestSum = sum; bestStart = s; }
   }
 
-  const titleLine = document.getElementById("titleLine");
-  titleLine.textContent = 'Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen ' + formatHHMM(base) + ')';
+  // otsikko
+  var titleLine = document.getElementById("titleLine");
+  titleLine.textContent = 'Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen ' + formatHHMMLocal(base) + ')';
 
-  const list = document.getElementById("list");
+  // rivit
+  var list = document.getElementById("list");
   list.innerHTML = "";
-  buckets.forEach((b, idx)=>{
-    const row = document.createElement("div");
-    const withinBest = (bestStart >= 0 && idx >= bestStart && idx < bestStart + K);
+  for (var r=0; r<buckets.length; r++){
+    var b = buckets[r];
+    var withinBest = (bestStart >= 0 && r >= bestStart && r < bestStart + K);
+    var row = document.createElement("div");
     row.className = "row next " + priceClass(b.avg) + (withinBest ? " highlight" : "");
-    row.innerHTML =
-      '<div class="time">' + b.label + '</div>' +
-      '<div class="price">' + (Number.isFinite(b.avg) ? b.avg.toFixed(3) : '-') + ' c/kWh</div>';
+    row.innerHTML = '<div class="time">' + b.label + '</div>' +
+                    '<div class="price">' + (isFinite(b.avg) ? b.avg.toFixed(3) : '-') + ' c/kWh</div>';
     list.appendChild(row);
-  });
+  }
 }
 
-/*** Näkymän vaihto ***/
+/*** Näkymän vaihto + ajastus/virransäästö ***/
 async function render(){
-  const chooser = document.getElementById("spanChooser");
+  var chooser = document.getElementById("spanChooser");
   if (viewMode === "quarters"){
-    chooser.classList.add("hidden");      // piilota span-valitsin
+    chooser.classList.add("hidden");
     await renderQuarters();
     updateCountdown();
   } else {
-    chooser.classList.remove("hidden");   // näytä span-valitsin
+    chooser.classList.remove("hidden");
     await renderHourly12h();
   }
 }
 function applyToggleButton(){
-  const btn = document.getElementById("toggle");
+  var btn = document.getElementById("toggle");
   if (viewMode === "quarters"){
     btn.textContent = "Näytä: 12 h tuntikeskihinta";
     btn.setAttribute("aria-pressed", "false");
@@ -261,11 +264,9 @@ function applyToggleButton(){
     btn.setAttribute("aria-pressed", "true");
   }
 }
-
-/*** Ajastimet & virransäästö ***/
 function startIntervals(){
   stopIntervals();
-  loadInterval = setInterval(render, 60*1000); // data päivittyy minuutin välein
+  loadInterval = setInterval(render, 60*1000);
   if (viewMode === "quarters"){
     countdownInterval = setInterval(updateCountdown, 250);
   }
@@ -274,24 +275,24 @@ function stopIntervals(){
   if (loadInterval){ clearInterval(loadInterval); loadInterval = null; }
   if (countdownInterval){ clearInterval(countdownInterval); countdownInterval = null; }
 }
-document.addEventListener("visibilitychange", ()=>{
+document.addEventListener("visibilitychange", function(){
   if (document.visibilityState === "visible"){
-    render();         // päivitä heti kun näkyviin
-    startIntervals(); // ajastimet päälle
+    render();
+    startIntervals();
   } else {
-    stopIntervals();  // virransäästö
+    stopIntervals();
   }
 });
 
 /*** Käynnistys ***/
-document.addEventListener("DOMContentLoaded", ()=>{
+document.addEventListener("DOMContentLoaded", function(){
   render();
   startIntervals();
 
-  // Toggle-näkymä
-  const btn = document.getElementById("toggle");
+  // Toggle
+  var btn = document.getElementById("toggle");
   applyToggleButton();
-  btn.addEventListener("click", async ()=>{
+  btn.addEventListener("click", async function(){
     viewMode = (viewMode === "quarters") ? "hours" : "quarters";
     applyToggleButton();
     await render();
@@ -299,18 +300,18 @@ document.addEventListener("DOMContentLoaded", ()=>{
   });
 
   // Halvimmat tunnit -valitsin
-  document.querySelectorAll('.spanbtn').forEach(b=>{
-    b.addEventListener('click', async (e)=>{
-      const span = Number(e.currentTarget.getAttribute('data-span')) || 1;
+  var spanBtns = document.querySelectorAll('.spanbtn');
+  for (var i=0;i<spanBtns.length;i++){
+    spanBtns[i].addEventListener('click', async function(e){
+      var span = Number(e.currentTarget.getAttribute('data-span')) || 1;
       cheapestSpan = Math.max(1, Math.min(3, span));
       // päivitä napit
-      document.querySelectorAll('.spanbtn').forEach(x=>{
-        const on = Number(x.getAttribute('data-span')) === cheapestSpan;
-        x.setAttribute('aria-pressed', on ? 'true' : 'false');
-      });
-      // jos ollaan 12h-näkymässä, renderöi heti
+      for (var j=0;j<spanBtns.length;j++){
+        var on = Number(spanBtns[j].getAttribute('data-span')) === cheapestSpan;
+        spanBtns[j].setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
       if (viewMode === "hours") await renderHourly12h();
     });
-  });
+  }
 });
 </script>
