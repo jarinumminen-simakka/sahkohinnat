@@ -1,1 +1,486 @@
-<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pörssisähkö + Sää – optimoitu</title><style>html,body{background:#000;color:#fff;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial,sans-serif}header,footer{text-align:center;padding:12px;color:#ddd}.container{max-width:1200px;margin:0 auto}.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.row{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid #111;transition:background .15s}.row.now{font-size:64px}.row.next{font-size:48px;color:#eee}.time{letter-spacing:.5px}.price{font-variant-numeric:tabular-nums}.cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}.highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}#countdown{font-weight:600;margin-left:8px;color:#9cf}#toggle,.spanbtn,button{-webkit-appearance:none;appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 14px;border-radius:10px;cursor:pointer;font-size:14px}#toggle:hover,.spanbtn:hover,button:hover{background:#151515}select{border:1px solid #333;background:#111;color:#eee;padding:8px 10px;border-radius:10px;font-size:14px}.group{display:flex;align-items:center;gap:8px}.spanbtn[aria-pressed=true]{background:#1e2a1e;border-color:#3fa73f;color:#cfe9cf}.hidden{display:none!important}#legend{font-size:12px;color:#aaa}#weatherWrap{padding:8px 12px;margin:8px auto}h2{margin:10px 0 4px}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{padding:8px;text-align:center;border-bottom:1px solid #222}th{background:#111;position:sticky;top:0}.cold{color:#9cf}.mild{color:#fff}.warm{color:#fc6}.hot{color:#f77}.wcalm{color:#fff}.wok{color:#8f8}.wwarn{color:#fc6}.wdang{color:#f77}.error{color:#f77;text-align:center;margin-top:8px}.searchbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.suggest{position:relative}.suggest-list{position:absolute;z-index:10;top:42px;left:0;right:0;background:#0e0e0e;border:1px solid #333;border-radius:10px;overflow:hidden;max-height:240px;overflow-y:auto}.suggest-item{padding:10px 12px;border-bottom:1px solid #222;cursor:pointer}.suggest-item:last-child{border-bottom:none}.suggest-item:hover{background:#1a1a1a}input[type=text]{width:260px;max-width:90vw;padding:8px 10px;border-radius:10px;border:1px solid #333;background:#111;color:#fff}</style><header class="container"><div class="bar"><div><div id="titleLine"></div><div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div></div><div class="group"><button id="toggle" aria-pressed="false" title="Vaihda näkymää">Näytä: 12 h tuntikeskihinta</button><div id="spanChooser" class="group hidden" aria-label="Halvimman jakson pituus"><span style="font-size:12px;color:#aaa">Korosta halvin jakso:</span><button class="spanbtn" data-span="1" aria-pressed="true">1 h</button><button class="spanbtn" data-span="2" aria-pressed="false">2 h</button><button class="spanbtn" data-span="3" aria-pressed="false">3 h</button></div></div><div class="searchbar" aria-label="Sää – paikkakuntahaku"><div class="suggest"><input id="q" type="text" placeholder="Paikkakunta (esim. Helsinki)" autocomplete="off"><div id="suggest" class="suggest-list hidden"></div></div><button id="btn">Hae sää</button><label for="weatherHours" style="font-size:12px;color:#aaa">Tunnit:</label><select id="weatherHours"><option value="6">6 h</option><option value="12">12 h</option><option value="24">24 h</option></select></div></div></header><div id="list" class="container"></div><div id="weatherWrap" class="container"><div id="weather"></div><div id="err" class="error"></div></div><footer class="container" id="footerNote">Sähkö: 1×/pv nouto • Sää: 6 h välein • Virransäästö: tauko, kun välilehti ei ole näkyvissä</footer><script>var apiPrices="https://sahkotin.fi/prices",apiGeo="https://geocoding-api.open-meteo.com/v1/search",apiWeather="https://api.open-meteo.com/v1/forecast";function pad2(e){return e<10?"0"+e:""+e}function formatHHMMLocal(e){return pad2(e.getHours())+":"+pad2(e.getMinutes())}function formatDateLocal(e){return pad2(e.getDate())+"."+pad2(e.getMonth()+1)+"."+e.getFullYear()}function toIsoZ(e){var t=new Date(Math.floor(e.getTime()/1e3)*1e3);return t.toISOString().replace(/\.\d{3}Z$/,".000Z")}function floorToQuarterLocal(e){var t=new Date(e.getTime());return t.setSeconds(0,0),t.setMinutes(15*Math.floor(t.getMinutes()/15)),t}function ceilToQuarterLocal(e){var t=floorToQuarterLocal(e);return 0===e.getSeconds()&&0===e.getMilliseconds()&&e.getMinutes()%15==0?e:new Date(t.getTime()+9e5)}function floorToHourLocal(e){var t=new Date(e.getTime());return t.setMinutes(0,0,0),t}function priceClass(e){return isFinite(e)?e<5?"cheap":e<10?"ok":e<20?"high":"spike":""}function saveLS(e,t){try{localStorage.setItem(e,JSON.stringify(t))}catch(e){}}function loadLS(e){try{var t=localStorage.getItem(e);return t?JSON.parse(t):null}catch(e){return null}}function nowIsoAtOffset(e){var t=new Date(Date.now()+1e3*(e||0));function n(e){return e<10?"0"+e:""+e}return t.getUTCFullYear()+"-"+n(t.getUTCMonth()+1)+"-"+n(t.getUTCDate())+"T"+n(t.getUTCHours())+":"+n(t.getUTCMinutes())}var viewMode="quarters",cheapestSpan=1,countdownInterval=null,rerenderInterval=null,pricesCacheKey="prices_cache_v1";function nextDailyRefreshTs(){var e=new Date,t=new Date(e.getFullYear(),e.getMonth(),e.getDate(),16,10,0,0);return e>=t&&(t=new Date(t.getTime()+864e5)),t.getTime()}function fetchPricesWindow(e,t){var n=apiPrices+"?quarter&fix&vat&start="+toIsoZ(e)+"&end="+toIsoZ(t);return fetch(n,{cache:"no-store"}).then(function(e){if(!e.ok)throw new Error("Hinta API "+e.status);return e.json()}).then(function(e){return(e.prices||[]).map(function(e){return{ts:new Date(e.date).getTime(),val:Number(e.value)}}).sort(function(e,t){return e.ts-t.ts})})}function ensurePrices(){var e=new Date,t=loadLS(pricesCacheKey),n=e.getFullYear()+"-"+pad2(e.getMonth()+1)+"-"+pad2(e.getDate());if(t&&t.day===n&&t.validUntil&&e.getTime()<t.validUntil&&Array.isArray(t.prices)&&t.prices.length)return Promise.resolve(t.prices);var a=new Date(e.getTime()-72e5),r=new Date(e.getTime()+1296e5);return fetchPricesWindow(a,r).then(function(e){var t={day:n,fetchedAt:Date.now(),validUntil:nextDailyRefreshTs(),start:a.getTime(),end:r.getTime(),prices:e};return saveLS(pricesCacheKey,t),e})}function sliceFourQuarters(e){for(var t=Date.now(),n=9e5,a=0,r=0;r<e.length;r++){var o=e[r].ts,i=o+n;if(t>=o&&t<i){a=r;break}}var s=e.slice(a,a+4);if(s.length<4&&a>0){var l=4-s.length;s=e.slice(Math.max(0,a-l),a).concat(s)}return s}function aggregate12h(e){for(var t=floorToHourLocal(new Date),n=[],a=0;a<12;a++){var r=new Date(t.getTime()+36e5*a);n.push({start:r.getTime(),label:pad2(r.getHours())+":00"})}for(var o=9e5,i=[],s=0;s<n.length;s++){for(var l=n[s].start,d=l+36e5,c=0,u=0,m=0;m<e.length;m++){var v=e[m].ts;v>=l&&v<d&&(c+=e[m].val,u++);if(v>=d)break}i.push({label:n[s].label,avg:u?c/u:NaN})}for(var f=Math.max(1,Math.min(3,cheapestSpan)),h=-1,p=1/0,g=0;g+f-1<i.length;g++){for(var y=!0,_=0,w=0;w<f;w++){var S=i[g+w].avg;if(!isFinite(S)){y=!1;break}_+=S}y&&_<p&&(p=_,h=g)}return{buckets:i,bestStart:h,bestLen:f}}function renderQuarters(){var e=new Date;return ensurePrices().then(function(t){var n=sliceFourQuarters(t),a=document.getElementById("titleLine");a.innerHTML="Tänään "+formatDateLocal(e)+" | Nyt: "+formatHHMMLocal(floorToQuarterLocal(e))+' <span id="countdown"></span>';var r=document.getElementById("list");r.innerHTML="";for(var o=0;o<n.length;o++){var i=n[o],s=document.createElement("div");s.className="row "+(0===o?"now":"next")+" "+priceClass(i.val),s.innerHTML='<div class="time">'+formatHHMMLocal(new Date(i.ts))+"</div><div class=\"price\">"+i.val.toFixed(3)+" c/kWh</div>",r.appendChild(s)}})}function renderHourly12h(){var e=floorToHourLocal(new Date);return ensurePrices().then(function(t){var n=aggregate12h(t),a=n.buckets,r=n.bestStart,o=n.bestLen;document.getElementById("titleLine").textContent="Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen "+formatHHMMLocal(e)+")";var i=document.getElementById("list");i.innerHTML="";for(var s=0;s<a.length;s++){var l=a[s],d=r>=0&&s>=r&&s<r+o,c=document.createElement("div");c.className="row next "+priceClass(l.avg)+(d?" highlight":""),c.innerHTML='<div class="time">'+l.label+"</div><div class=\"price\">"+(isFinite(l.avg)?l.avg.toFixed(3):"-")+" c/kWh</div>",i.appendChild(c)}})}function renderPrices(){var e=document.getElementById("spanChooser"),t=document.getElementById("weatherWrap");return"quarters"===viewMode?(e.classList.add("hidden"),t.classList.remove("hidden"),renderQuarters().then(function(){updateCountdown(),refreshWeatherFromStorage()})):(e.classList.remove("hidden"),t.classList.add("hidden"),renderHourly12h())}function applyToggleButton(){var e=document.getElementById("toggle");"quarters"===viewMode?(e.textContent="Näytä: 12 h tuntikeskihinta",e.setAttribute("aria-pressed","false")):(e.textContent="Näytä: nyt + 3 varttia",e.setAttribute("aria-pressed","true"))}var qEl,sBox,btn,weatherEl,errEl,weatherHoursSel,weatherInterval=null,weatherCacheKey="weather_cache_v2";try{localStorage.removeItem("weather_cache_v1")}catch(e){}function clsByTemp(e){return e<0?"cold":e<10?"mild":e<20?"warm":"hot"}function clearErr(){errEl&&(errEl.textContent="")}function showErr(e){errEl&&(errEl.textContent=e)}function hideSuggest(){sBox.classList.add("hidden"),sBox.innerHTML=""}function showSuggest(e){if(!e||!e.length)return void hideSuggest();for(var t="",n=0;n<e.length;n++){var a=e[n],r=a.name||"",o=a.admin1?", "+a.admin1:"",i=a.country?" ("+a.country+")":"",s=r+o+i;t+='<div class="suggest-item" data-lat="'+a.latitude+'" data-lon="'+a.longitude+'" data-name="'+encodeURIComponent(s)+'">'+s+"</div>"}sBox.innerHTML=t,sBox.classList.remove("hidden")}function weatherIcon(e){return e=Number(e),0===e?"☀️":[1,2].indexOf(e)>=0?"🌤️":3===e?"☁️":[45,48].indexOf(e)>=0?"🌫️":[51,53,55].indexOf(e)>=0?"🌦️":[56,57,61,63,65,80,81,82].indexOf(e)>=0?"🌧️":[66,67].indexOf(e)>=0?"🌧️❄️":[71,73,75,85,86].indexOf(e)>=0?"❄️":[95,96,99].indexOf(e)>=0?"⛈️":"❓"}function windClass(e){return!(e>=0)?"":e<3?"wcalm":e<8?"wok":e<12?"wwarn":"wdang"}function renderWeatherTable(e,t,n,a,r,o){for(var i="<h2>"+e+"</h2>",s='<table><tr><th>Aika</th><th>Sää</th><th>Lämpötila °C</th><th>Sade mm</th><th>Tuuli m/s</th></tr>',l=0;l<t.length;l++){var d=n[l],c=a[l],u=r[l],m=o[l],v=clsByTemp(d),f=windClass(u),h=t[l].slice(11,16);s+="<tr><td>"+h+"</td><td>"+weatherIcon(m)+"</td><td class='"+v+"'>"+(isFinite(d)?d.toFixed(1):"-")+"</td><td>"+(isFinite(c)?c.toFixed(1):"-")+"</td><td class='"+f+"'>"+(isFinite(u)?u.toFixed(1):"-")+"</td></tr>"}s+="</table>",weatherEl.innerHTML=i+s}function geocode(e){var t=apiGeo+"?name="+encodeURIComponent(e)+"&count=5&language=fi";return fetch(t,{cache:"no-store"}).then(function(e){if(!e.ok)throw new Error("Geokoodaus epäonnistui ("+e.status+")");return e.json()}).then(function(e){return e&&e.results?e.results:[]}).catch(function(e){return showErr("Geokoodausvirhe: "+e.message),[]})}function weatherCacheValid(){var e=loadLS(weatherCacheKey);return!!e&&"number"==typeof e.offset&&Date.now()-(e.fetchedAt||0)<216e5}function getStoredPlace(){try{var e=localStorage.getItem("last_place_label"),t=parseFloat(localStorage.getItem("last_place_lat")),n=parseFloat(localStorage.getItem("last_place_lon"));if(e&&isFinite(t)&&isFinite(n))return{label:e,lat:t,lon:n}}catch(e){}return null}function fetchWeather(e,t,n){clearErr();var a=loadLS(weatherCacheKey),r=Number(localStorage.getItem("weather_hours")||"6");[6,12,24].includes(r)||(r=6);if(a&&weatherCacheValid()&&a.lat===e&&a.lon===t)return void renderWeatherFromCache(a,n,r);var o=apiWeather+"?latitude="+e+"&longitude="+t+"&hourly=temperature_2m,precipitation,wind_speed_10m,weathercode&timezone=auto&timeformat=iso8601&wind_speed_unit=ms";fetch(o,{cache:"no-store"}).then(function(e){if(!e.ok)throw new Error("Sääpalvelun virhe ("+e.status+")");return e.json()}).then(function(a){var o={fetchedAt:Date.now(),lat:e,lon:t,offset:a.utc_offset_seconds||0,hours:a.hourly&&a.hourly.time||[],temps:a.hourly&&a.hourly.temperature_2m||[],precs:a.hourly&&a.hourly.precipitation||[],winds:a.hourly&&a.hourly.wind_speed_10m||[],codes:a.hourly&&a.hourly.weathercode||[]};saveLS(weatherCacheKey,o),renderWeatherFromCache(o,n,r);try{localStorage.setItem("last_place_label",n),localStorage.setItem("last_place_lat",""+e),localStorage.setItem("last_place_lon",""+t)}catch(e){}}).catch(function(e){showErr("Virhe haettaessa säätä: "+e.message)})}function renderWeatherFromCache(e,t,n){var a=nowIsoAtOffset(e.offset||0),r=a.slice(0,13)+":00",o=0;for(var i=0;i<e.hours.length;i++)if(e.hours[i]>=r){o=i;break}var s=Math.min(o+n,e.hours.length);renderWeatherTable(t,e.hours.slice(o,s),e.temps.slice(o,s),e.precs.slice(o,s),e.winds.slice(o,s),e.codes.slice(o,s))}var weatherInterval=null;function startWeatherInterval(){stopWeatherInterval(),weatherInterval=setInterval(function(){if("quarters"!==viewMode)return;var e=getStoredPlace();e&&fetchWeather(e.lat,e.lon,e.label)},36e5)}function stopWeatherInterval(){weatherInterval&&(clearInterval(weatherInterval),weatherInterval=null)}function refreshWeatherFromStorage(){if("quarters"!==viewMode)return;var e=getStoredPlace();e&&fetchWeather(e.lat,e.lon,e.label)}function startUiIntervals(){rerenderInterval&&clearInterval(rerenderInterval),rerenderInterval=setInterval(renderPrices,6e4),countdownInterval&&clearInterval(countdownInterval),"quarters"===viewMode&&(countdownInterval=setInterval(function(){var e=document.getElementById("countdown");e&&updateCountdown()},250))}function stopUiIntervals(){rerenderInterval&&(clearInterval(rerenderInterval),rerenderInterval=null),countdownInterval&&(clearInterval(countdownInterval),countdownInterval=null)}document.addEventListener("visibilitychange",function(){"visible"===document.visibilityState?(renderPrices(),startUiIntervals(),startWeatherInterval()):(stopUiIntervals(),stopWeatherInterval())});document.addEventListener("DOMContentLoaded",function(){renderPrices(),startUiIntervals();var e=document.getElementById("toggle");applyToggleButton(),e.addEventListener("click",function(){viewMode="quarters"===viewMode?"hours":"quarters",applyToggleButton(),renderPrices().then(function(){startUiIntervals()})});var t=document.querySelectorAll(".spanbtn");for(var n=0;n<t.length;n++)t[n].addEventListener("click",function(e){var t=Number(e.currentTarget.getAttribute("data-span"))||1;cheapestSpan=Math.max(1,Math.min(3,t));for(var n=0;n<document.querySelectorAll(".spanbtn").length;n++){var a=document.querySelectorAll(".spanbtn")[n],r=Number(a.getAttribute("data-span"))===cheapestSpan;a.setAttribute("aria-pressed",r?"true":"false")}"hours"===viewMode&&renderHourly12h()});var a=document.getElementById("suggest");qEl=document.getElementById("q"),sBox=a,btn=document.getElementById("btn"),weatherEl=document.getElementById("weather"),errEl=document.getElementById("err"),weatherHoursSel=document.getElementById("weatherHours");var r=Number(localStorage.getItem("weather_hours")||"6");[6,12,24].includes(r)||(r=6),weatherHoursSel.value=String(r),weatherHoursSel.addEventListener("change",function(){var e=Number(weatherHoursSel.value)||6;[6,12,24].includes(e)||(e=6),localStorage.setItem("weather_hours",String(e)),refreshWeatherFromStorage()});btn.addEventListener("click",function(){hideSuggest();var e=(qEl.value||"").trim();if(!e)return void showErr("Anna paikkakunnan nimi.");geocode(e).then(function(e){if(!e.length)return void showErr("Paikkakuntaa ei löytynyt.");var t=e[0],n=(t.name||"")+(t.admin1?", "+t.admin1:"")+(t.country?" ("+t.country+")"):"";fetchWeather(t.latitude,t.longitude,n)})});var o=null;qEl.addEventListener("input",function(){clearErr();var e=(qEl.value||"").trim();o&&clearTimeout(o),e?o=setTimeout(function(){geocode(qEl.value||"").then(function(e){showSuggest(e)}).catch(function(){})},250):hideSuggest()}),sBox.addEventListener("click",function(e){var t=e.target.closest(".suggest-item");if(!t)return;var n=parseFloat(t.getAttribute("data-lat")),a=parseFloat(t.getAttribute("data-lon")),r=decodeURIComponent(t.getAttribute("data-name")||"");qEl.value=r.replace(/\s+/g," "),hideSuggest(),fetchWeather(n,a,r)}),qEl.addEventListener("keydown",function(e){"Enter"===e.key&&(e.preventDefault(),btn.click()),"Escape"===e.key&&hideSuggest()}),document.addEventListener("click",function(e){e.target.closest(".suggest")||hideSuggest()}),function(){var e=getStoredPlace();e||(qEl.value="Helsinki (FI)",e={label:"Helsinki (FI)",lat:60.17,lon:24.94}),qEl.value=e.label,"quarters"===viewMode&&fetchWeather(e.lat,e.lon,e.label),startWeatherInterval()}()});function updateCountdown(){var e=document.getElementById("countdown");if(e){var t=new Date,n=ceilToQuarterLocal(new Date(t.getTime())),a=n-t;a<0&&(a=0);var r=Math.floor(a/1e3);e.textContent="→ seuraava vartti "+pad2(Math.floor(r/60))+":"+pad2(r%60)}}function applyToggleButton(){var e=document.getElementById("toggle");"quarters"===viewMode?(e.textContent="Näytä: 12 h tuntikeskihinta",e.setAttribute("aria-pressed","false")):(e.textContent="Näytä: nyt + 3 varttia",e.setAttribute("aria-pressed","true"))}</script>
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pörssisähkö + Sää (Open-Meteo) – iPad-fix + tuulivärit</title>
+<style>
+  html,body{background:#000;color:#fff;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial,sans-serif}
+  header,footer{text-align:center;padding:12px;color:#ddd}
+  .container{max-width:1200px;margin:0 auto}
+  .bar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  /* sähkö */
+  .row{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid #111;transition:background .15s}
+  .row.now{font-size:64px}
+  .row.next{font-size:48px;color:#eee}
+  .time{letter-spacing:.5px}
+  .price{font-variant-numeric:tabular-nums}
+  .cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}
+  .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
+  #countdown{font-weight:600;margin-left:8px;color:#9cf}
+
+  /* napit */
+  #toggle,.spanbtn,button{-webkit-appearance:none;appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 14px;border-radius:10px;cursor:pointer;font-size:14px}
+  #toggle:hover,.spanbtn:hover,button:hover{background:#151515}
+  select{border:1px solid #333;background:#111;color:#eee;padding:8px 10px;border-radius:10px;font-size:14px}
+  .group{display:flex;align-items:center;gap:8px}
+  .spanbtn[aria-pressed="true"]{background:#1e2a1e;border-color:#3fa73f;color:#cfe9cf}
+  .hidden{display:none!important}
+  #legend{font-size:12px;color:#aaa}
+
+  /* sää */
+  #weatherWrap{padding:8px 12px;margin:8px auto}
+  h2{margin:10px 0 4px}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{padding:8px;text-align:center;border-bottom:1px solid #222}
+  th{background:#111;position:sticky;top:0}
+  .cold{color:#9cf}.mild{color:#fff}.warm{color:#fc6}.hot{color:#f77} /* lämpötilan värit */
+  /* tuulen värit */
+  .wcalm{color:#fff}  /* <3 m/s */
+  .wok  {color:#8f8}  /* <8 m/s */
+  .wwarn{color:#fc6}  /* <12 m/s */
+  .wdang{color:#f77}  /* ≥12 m/s */
+
+  .error{color:#f77;text-align:center;margin-top:8px}
+
+  /* haku */
+  .searchbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .suggest{position:relative}
+  .suggest-list{position:absolute;z-index:10;top:42px;left:0;right:0;background:#0e0e0e;border:1px solid #333;border-radius:10px;overflow:hidden;max-height:240px;overflow-y:auto}
+  .suggest-item{padding:10px 12px;border-bottom:1px solid #222;cursor:pointer}
+  .suggest-item:last-child{border-bottom:none}
+  .suggest-item:hover{background:#1a1a1a}
+  input[type="text"]{width:260px;max-width:90vw;padding:8px 10px;border-radius:10px;border:1px solid #333;background:#111;color:#fff}
+</style>
+
+<header class="container">
+  <div class="bar">
+    <div>
+      <div id="titleLine"></div>
+      <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
+    </div>
+    <div class="group">
+      <button id="toggle" aria-pressed="false" title="Vaihda näkymää">Näytä: 12 h tuntikeskihinta</button>
+      <div id="spanChooser" class="group hidden" aria-label="Halvimman jakson pituus">
+        <span style="font-size:12px;color:#aaa">Korosta halvin jakso:</span>
+        <button class="spanbtn" data-span="1" aria-pressed="true">1 h</button>
+        <button class="spanbtn" data-span="2" aria-pressed="false">2 h</button>
+        <button class="spanbtn" data-span="3" aria-pressed="false">3 h</button>
+      </div>
+    </div>
+    <div class="searchbar" aria-label="Sää – paikkakuntahaku">
+      <div class="suggest">
+        <input id="q" type="text" placeholder="Paikkakunta (esim. Helsinki)" autocomplete="off">
+        <div id="suggest" class="suggest-list hidden"></div>
+      </div>
+      <button id="btn">Hae sää</button>
+      <label for="weatherHours" style="font-size:12px;color:#aaa">Tunnit:</label>
+      <select id="weatherHours">
+        <option value="6">6 h</option>
+        <option value="12">12 h</option>
+        <option value="24">24 h</option>
+      </select>
+    </div>
+  </div>
+</header>
+
+<!-- sähkön hinnat -->
+<div id="list" class="container"></div>
+
+<!-- sää: vain varttinäkymässä -->
+<div id="weatherWrap" class="container">
+  <div id="weather"></div>
+  <div id="err" class="error"></div>
+</div>
+
+<footer class="container" id="footerNote">Sähkö: 1×/pv nouto • Sää: 6 h välein • Virransäästö: tauko, kun välilehti ei ole näkyvissä</footer>
+
+<script>
+/* ===== Legacy Safari polyfills (iPad 2013) ===== */
+/* Promise (minimi, riittää .then/.catch-käyttöön) */
+(function(g){if(g.Promise)return;function P(fn){var s='p',v,d=[];
+function h(a){if(s==='p'){d.push(a);return;}setTimeout(function(){var cb=s==='f'?a.onF:a.onR;if(!cb){(s==='f'?a.res:a.rej)(v);return;}try{a.res(cb(v));}catch(e){a.rej(e);}},0);}
+function r(x){try{if(x&& (typeof x==='object'||typeof x==='function')){var t=x.then;if(typeof t==='function'){t.call(x,r,j);return;}}}catch(e){j(e);return;}
+s='f';v=x;for(var i=0;i<d.length;i++)h(d[i]);d=null;}
+function j(e){s='r';v=e;for(var i=0;i<d.length;i++)h(d[i]);d=null;}
+this.then=function(f,c){return new P(function(res,rej){h({onF:typeof f==='function'?f:null,onR:typeof c==='function'?c:null,res:res,rej:rej});});};
+this.catch=function(c){return this.then(null,c);};
+try{fn(r,j);}catch(e){j(e);}}P.resolve=function(x){return new P(function(r){r(x);});};
+P.reject=function(e){return new P(function(_,r){r(e);});};g.Promise=P;})(this);
+
+/* fetch (XHR) */
+(function(g){if(g.fetch)return;g.fetch=function(u,o){o=o||{};return new Promise(function(res,rej){
+var x=new XMLHttpRequest();x.open(o.method||'GET',u,true);
+if(o.headers){for(var k in o.headers){try{x.setRequestHeader(k,o.headers[k]);}catch(_){}}}
+x.onload=function(){res({ok:x.status>=200&&x.status<300,status:x.status,
+json:function(){return Promise.resolve(JSON.parse(x.responseText));},
+text:function(){return Promise.resolve(x.responseText);}});};
+x.onerror=function(){rej(new TypeError('Network request failed'));};
+x.send(o.body||null);});};})(this);
+
+/* Element.matches / .closest */
+(function(){if(!Element.prototype.matches){
+Element.prototype.matches=Element.prototype.msMatchesSelector||Element.prototype.webkitMatchesSelector||
+function(sel){var n=this, list=(this.parentNode||document).querySelectorAll(sel), i=-1; while(list[++i]&&list[i]!==n){} return !!list[i];};}
+if(!Element.prototype.closest){Element.prototype.closest=function(sel){var el=this; while(el&&el.nodeType===1){if(el.matches(sel))return el; el=el.parentElement||el.parentNode;} return null;};}})();
+
+/* Array.prototype.includes */
+(function(){if(Array.prototype.includes)return;Array.prototype.includes=function(search,from){
+var O=Object(this),len=parseInt(O.length)||0;if(len===0)return false;var n=parseInt(from)||0;var k=n>=0?n:Math.max(len+n,0);
+while(k<len){var cur=O[k];if(cur===search||(typeof cur==='number'&&typeof search==='number'&&isNaN(cur)&&isNaN(search)))return true;k++;}return false;};})();
+</script>
+
+<script>
+/* ===== Perusapuja ===== */
+var apiPrices="https://sahkotin.fi/prices";
+var apiGeo="https://geocoding-api.open-meteo.com/v1/search";
+var apiWeather="https://api.open-meteo.com/v1/forecast";
+
+function pad2(n){return n<10?"0"+n:""+n}
+function formatHHMMLocal(d){return pad2(d.getHours())+":"+pad2(d.getMinutes())}
+function formatDateLocal(d){return pad2(d.getDate())+"."+pad2(d.getMonth()+1)+"."+d.getFullYear()}
+function toIsoZ(d){var z=new Date(Math.floor(d.getTime()/1000)*1000);return z.toISOString().replace(/\.\d{3}Z$/,".000Z")}
+function floorToQuarterLocal(d){var r=new Date(d.getTime());r.setSeconds(0,0);r.setMinutes(Math.floor(r.getMinutes()/15)*15);return r}
+function ceilToQuarterLocal(d){var f=floorToQuarterLocal(d);if(d.getSeconds()===0&&d.getMilliseconds()===0&&d.getMinutes()%15===0)return d;return new Date(f.getTime()+15*60*1000)}
+function floorToHourLocal(d){var r=new Date(d.getTime());r.setMinutes(0,0,0);return r}
+function priceClass(v){if(!isFinite(v))return"";if(v<5)return"cheap";if(v<10)return"ok";if(v<20)return"high";return"spike"}
+
+/* ===== iPad-sää: muodosta “nyt” merkkijonona samalla offsetilla ===== */
+function nowIsoAtOffset(offsetSec){
+  // Date.now() on jo UTC-ms — älä lisää getTimezoneOffsetia
+  var t = new Date(Date.now() + (offsetSec||0)*1000);
+  function p2(n){return n<10?"0"+n:""+n}
+  // Rakennetaan kohdezonessa (käytetään UTC-gettereitä, koska kello siirrettiin offsettiin)
+  return t.getUTCFullYear()+"-"+p2(t.getUTCMonth()+1)+"-"+p2(t.getUTCDate())
+       +"T"+p2(t.getUTCHours())+":"+p2(t.getUTCMinutes());
+}
+/* ===== Välimuisti ===== */
+function saveLS(key,obj){try{localStorage.setItem(key,JSON.stringify(obj))}catch(e){}}
+function loadLS(key){try{var s=localStorage.getItem(key);return s?JSON.parse(s):null}catch(e){return null}}
+
+/* ===== Sähkö (cache 1×/pv) ===== */
+var viewMode="quarters", cheapestSpan=1;
+var countdownInterval=null, rerenderInterval=null;
+var pricesCacheKey="prices_cache_v1";
+
+function nextDailyRefreshTs(){
+  var now=new Date();
+  var target=new Date(now.getFullYear(),now.getMonth(),now.getDate(),16,10,0,0);
+  if(now>=target) target=new Date(target.getTime()+24*60*60*1000);
+  return target.getTime();
+}
+function fetchPricesWindow(start,end){
+  var url=apiPrices+"?quarter&fix&vat&start="+toIsoZ(start)+"&end="+toIsoZ(end);
+  return fetch(url,{cache:"no-store"})
+    .then(function(res){ if(!res.ok) throw new Error("Hinta API "+res.status); return res.json(); })
+    .then(function(data){
+      return (data.prices||[]).map(function(p){ return { ts:(new Date(p.date)).getTime(), val:Number(p.value) }})
+                              .sort(function(a,b){ return a.ts-b.ts });
+    });
+}
+function ensurePrices(){
+  var now=new Date();
+  var cached=loadLS(pricesCacheKey);
+  var todayKey=now.getFullYear()+"-"+pad2(now.getMonth()+1)+"-"+pad2(now.getDate());
+  if(cached && cached.day===todayKey && cached.validUntil && now.getTime()<cached.validUntil && Array.isArray(cached.prices) && cached.prices.length){
+    return Promise.resolve(cached.prices);
+  }
+  var start=new Date(now.getTime()-2*60*60*1000);
+  var end  =new Date(now.getTime()+36*60*60*1000);
+  return fetchPricesWindow(start,end).then(function(prices){
+    saveLS(pricesCacheKey,{day:todayKey,fetchedAt:Date.now(),validUntil:nextDailyRefreshTs(),start:start.getTime(),end:end.getTime(),prices:prices});
+    return prices;
+  });
+}
+function sliceFourQuarters(prices){
+  var now=Date.now(), qMs=15*60*1000, idx=0;
+  for(var i=0;i<prices.length;i++){ var s=prices[i].ts, e=s+qMs; if(now>=s && now<e){ idx=i; break; } }
+  var four=prices.slice(idx,idx+4);
+  if(four.length<4 && idx>0){ var need=4-four.length; four=prices.slice(Math.max(0,idx-need),idx).concat(four) }
+  return four;
+}
+function aggregate12h(prices){
+  var base=floorToHourLocal(new Date());
+  var hours=[]; for(var h=0;h<12;h++){ var d=new Date(base.getTime()+h*60*60*1000); hours.push({start:d.getTime(), label:pad2(d.getHours())+":00"}) }
+  var out=[];
+  for(var i=0;i<hours.length;i++){
+    var hs=hours[i].start, he=hs+60*60*1000, sum=0,cnt=0;
+    for(var k=0;k<prices.length;k++){ var t=prices[k].ts; if(t>=hs && t<he){ sum+=prices[k].val; cnt++; } if(t>=he) break; }
+    out.push({label:hours[i].label, avg:cnt?sum/cnt:NaN});
+  }
+  var K=Math.max(1,Math.min(3,cheapestSpan)), bestStart=-1, bestSum=Infinity;
+  for(var s=0;s+K-1<out.length;s++){ var ok=true,sum=0; for(var j=0;j<K;j++){ var v=out[s+j].avg; if(!isFinite(v)){ok=false;break} sum+=v } if(ok && sum<bestSum){ bestSum=sum; bestStart=s } }
+  return {buckets:out,bestStart:bestStart,bestLen:K};
+}
+
+/* ----- Render sähkö ----- */
+function updateCountdown(){
+  var el=document.getElementById("countdown"); if(!el) return;
+  var now=new Date(), nq=ceilToQuarterLocal(new Date(now.getTime())), ms=nq-now; if(ms<0) ms=0;
+  var s=Math.floor(ms/1000);
+  el.textContent="→ seuraava vartti "+pad2(Math.floor(s/60))+":"+pad2(s%60);
+}
+function renderQuarters(){
+  var now=new Date();
+  return ensurePrices().then(function(prices){
+    var four=sliceFourQuarters(prices);
+    document.getElementById("titleLine").innerHTML='Tänään '+formatDateLocal(now)+' | Nyt: '+formatHHMMLocal(floorToQuarterLocal(now))+' <span id="countdown"></span>';
+    var list=document.getElementById("list"); list.innerHTML="";
+    for(var k=0;k<four.length;k++){
+      var p=four[k], row=document.createElement("div"); row.className="row "+(k===0?"now":"next")+" "+priceClass(p.val);
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+p.val.toFixed(3)+' c/kWh</div>';
+      list.appendChild(row);
+    }
+  });
+}
+function renderHourly12h(){
+  var base=floorToHourLocal(new Date());
+  return ensurePrices().then(function(prices){
+    var agg=aggregate12h(prices);
+    document.getElementById("titleLine").textContent='Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen '+formatHHMMLocal(base)+')';
+    var list=document.getElementById("list"); list.innerHTML="";
+    for(var r=0;r<agg.buckets.length;r++){
+      var b=agg.buckets[r], within=(agg.bestStart>=0 && r>=agg.bestStart && r<agg.bestStart+agg.bestLen);
+      var row=document.createElement("div"); row.className="row next "+priceClass(b.avg)+(within?" highlight":"");
+      row.innerHTML='<div class="time">'+b.label+'</div><div class="price">'+(isFinite(b.avg)?b.avg.toFixed(3):"-")+' c/kWh</div>';
+      list.appendChild(row);
+    }
+  });
+}
+function renderPrices(){
+  var chooser=document.getElementById("spanChooser");
+  var weatherWrap=document.getElementById("weatherWrap");
+  if(viewMode==="quarters"){
+    chooser.classList.add("hidden");
+    weatherWrap.classList.remove("hidden");
+    return renderQuarters().then(function(){ updateCountdown(); refreshWeatherFromStorage(); });
+  }else{
+    chooser.classList.remove("hidden");
+    weatherWrap.classList.add("hidden");
+    return renderHourly12h();
+  }
+}
+function applyToggleButton(){
+  var btn=document.getElementById("toggle");
+  if(viewMode==="quarters"){ btn.textContent="Näytä: 12 h tuntikeskihinta"; btn.setAttribute("aria-pressed","false"); }
+  else { btn.textContent="Näytä: nyt + 3 varttia"; btn.setAttribute("aria-pressed","true"); }
+}
+
+/* ===== Sää (cache 6 h) ===== */
+var qEl,sBox,btn,weatherEl,errEl,weatherHoursSel;
+var weatherCacheKey="weather_cache_v2"; /* BUMPattu jotta offset varmasti mukana */
+try{ localStorage.removeItem('weather_cache_v1'); }catch(e){}
+var weatherInterval=null;
+
+function clsByTemp(t){ return t<0?"cold":t<10?"mild":t<20?"warm":"hot" }
+/* Tuuliväri: <3 valk, <8 vihreä, <12 oranssi, ≥12 punainen */
+function windClass(w){
+  if(!(w>=0)) return "";
+  if(w < 3)  return "wcalm";
+  if(w < 8)  return "wok";
+  if(w < 12) return "wwarn";
+  return "wdang";
+}
+function clearErr(){ if(errEl) errEl.textContent="" }
+function showErr(msg){ if(errEl) errEl.textContent=msg }
+function hideSuggest(){ sBox.classList.add('hidden'); sBox.innerHTML="" }
+function showSuggest(items){
+  if(!items||!items.length){ hideSuggest(); return }
+  var html=""; for(var i=0;i<items.length;i++){ var it=items[i]; var name=it.name||""; var adm=it.admin1?(", "+it.admin1):""; var cn=it.country?(" ("+it.country+")"):""; var label=name+adm+cn;
+    html+='<div class="suggest-item" data-lat="'+it.latitude+'" data-lon="'+it.longitude+'" data-name="'+encodeURIComponent(label)+'">'+label+'</div>'
+  }
+  sBox.innerHTML=html; sBox.classList.remove('hidden')
+}
+function weatherIcon(code){
+  code=Number(code);
+  if(code===0)return"☀️";if(code===1||code===2)return"🌤️";if(code===3)return"☁️";
+  if(code===45||code===48)return"🌫️";
+  if(code===51||code===53||code===55)return"🌦️";
+  if(code===56||code===57||code===61||code===63||code===65||code===80||code===81||code===82)return"🌧️";
+  if(code===66||code===67)return"🌧️❄️";
+  if(code===71||code===73||code===75||code===85||code===86)return"❄️";
+  if(code===95||code===96||code===99)return"⛈️";
+  return"❓";
+}
+function renderWeatherTable(place,hours,temps,precs,winds,codes){
+  var html="<h2>"+place+"</h2>";
+  html+='<table><tr><th>Aika</th><th>Sää</th><th>Lämpötila °C</th><th>Sade mm</th><th>Tuuli m/s</th></tr>';
+  for(var i=0;i<hours.length;i++){
+    var t=temps[i], p=precs[i], w=winds[i], c=codes[i];
+    var tc=clsByTemp(t), wc=windClass(w);
+    var hhmm=hours[i].slice(11,16);
+    html+="<tr><td>"+hhmm+"</td><td>"+weatherIcon(c)+"</td><td class='"+tc+"'>"+(isFinite(t)?t.toFixed(1):"-")+"</td><td>"+(isFinite(p)?p.toFixed(1):"-")+"</td><td class='"+wc+"'>"+(isFinite(w)?w.toFixed(1):"-")+"</td></tr>";
+  }
+  html+="</table>";
+  weatherEl.innerHTML=html;
+}
+function geocode(name){
+  var url=apiGeo+"?name="+encodeURIComponent(name)+"&count=5&language=fi";
+  return fetch(url,{cache:"no-store"})
+    .then(function(res){ if(!res.ok) throw new Error("Geokoodaus epäonnistui ("+res.status+")"); return res.json(); })
+    .then(function(data){ return (data&&data.results)?data.results:[] })
+    .catch(function(e){ showErr("Geokoodausvirhe: "+e.message); return [] });
+}
+function weatherCacheValid(){
+  var c=loadLS(weatherCacheKey); if(!c) return false;
+  if(typeof c.offset!=="number") return false; /* vaaditaan offset */
+  return (Date.now()-(c.fetchedAt||0)) < 6*60*60*1000;
+}
+function getStoredPlace(){
+  try{
+    var label=localStorage.getItem("last_place_label");
+    var lat=parseFloat(localStorage.getItem("last_place_lat"));
+    var lon=parseFloat(localStorage.getItem("last_place_lon"));
+    if(label && isFinite(lat) && isFinite(lon)) return {label:label,lat:lat,lon:lon};
+  }catch(e){}
+  return null;
+}
+function fetchWeather(lat,lon,placeLabel){
+  clearErr();
+  var wc=loadLS(weatherCacheKey);
+  var hoursWanted=Number(localStorage.getItem("weather_hours")||"6"); if(![6,12,24].includes(hoursWanted)) hoursWanted=6;
+  if(wc && weatherCacheValid() && wc.lat===lat && wc.lon===lon){
+    renderWeatherFromCache(wc,placeLabel,hoursWanted);
+    try{ localStorage.setItem("last_place_label",placeLabel); localStorage.setItem("last_place_lat",String(lat)); localStorage.setItem("last_place_lon",String(lon)); }catch(e){}
+    return;
+  }
+  var url=apiWeather+"?latitude="+lat+"&longitude="+lon
+    +"&hourly=temperature_2m,precipitation,wind_speed_10m,weathercode"
+    +"&timezone=auto&timeformat=iso8601&wind_speed_unit=ms";
+  fetch(url,{cache:"no-store"})
+    .then(function(res){ if(!res.ok) throw new Error("Sääpalvelun virhe ("+res.status+")"); return res.json(); })
+    .then(function(data){
+      var payload={
+        fetchedAt: Date.now(),
+        lat: lat, lon: lon,
+        offset: (data.utc_offset_seconds || 0),
+        hours: (data.hourly&&data.hourly.time)||[],
+        temps: (data.hourly&&data.hourly.temperature_2m)||[],
+        precs: (data.hourly&&data.hourly.precipitation)||[],
+        winds: (data.hourly&&data.hourly.wind_speed_10m)||[],
+        codes: (data.hourly&&data.hourly.weathercode)||[]
+      };
+      saveLS(weatherCacheKey,payload);
+      renderWeatherFromCache(payload,placeLabel,hoursWanted);
+      try{ localStorage.setItem("last_place_label",placeLabel); localStorage.setItem("last_place_lat",String(lat)); localStorage.setItem("last_place_lon",String(lon)); }catch(e){}
+    })
+    .catch(function(e){ showErr("Virhe haettaessa säätä: "+e.message); });
+}
+function renderWeatherFromCache(c,placeLabel,hoursWanted){
+	var nowStr = nowIsoAtOffset(c.offset||0);
+	// Pyöristä “nyt” tunnin alkuun (YYYY-MM-DDTHH:00)
+	var hourFloor = nowStr.slice(0,13)+":00";
+	var idx=0;
+	for(var i=0;i<c.hours.length;i++){ if(c.hours[i] >= hourFloor){ idx=i; break; } }
+  var end=Math.min(idx+hoursWanted,c.hours.length);
+  renderWeatherTable(placeLabel, c.hours.slice(idx,end), c.temps.slice(idx,end), c.precs.slice(idx,end), c.winds.slice(idx,end), c.codes.slice(idx,end));
+}
+/* vain varttinäkymässä tarkistetaan tunnin välein (nouto vain jos cache >6h) */
+function startWeatherInterval(){
+  stopWeatherInterval();
+  weatherInterval=setInterval(function(){
+    if(viewMode!=="quarters") return;
+    var place=getStoredPlace(); if(place) fetchWeather(place.lat,place.lon,place.label);
+  }, 60*60*1000);
+}
+function stopWeatherInterval(){ if(weatherInterval){ clearInterval(weatherInterval); weatherInterval=null } }
+function refreshWeatherFromStorage(){
+  if(viewMode!=="quarters") return;
+  var place=getStoredPlace(); if(place) fetchWeather(place.lat,place.lon,place.label);
+}
+
+/* ===== Elinkaari ===== */
+function startUiIntervals(){
+  if(rerenderInterval) clearInterval(rerenderInterval);
+  rerenderInterval=setInterval(renderPrices, 60*1000);
+  if(countdownInterval) clearInterval(countdownInterval);
+  if(viewMode==="quarters"){ countdownInterval=setInterval(function(){ var el=document.getElementById("countdown"); if(el) updateCountdown() }, 250); }
+}
+function stopUiIntervals(){ if(rerenderInterval){clearInterval(rerenderInterval);rerenderInterval=null} if(countdownInterval){clearInterval(countdownInterval);countdownInterval=null} }
+
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible"){ renderPrices(); startUiIntervals(); startWeatherInterval(); }
+  else{ stopUiIntervals(); stopWeatherInterval(); }
+});
+document.addEventListener("DOMContentLoaded",function(){
+  /* sähkö */
+  renderPrices(); startUiIntervals();
+  var toggleBtn=document.getElementById("toggle"); applyToggleButton();
+  toggleBtn.addEventListener("click",function(){
+    viewMode=(viewMode==="quarters")?"hours":"quarters";
+    applyToggleButton();
+    renderPrices().then(function(){ startUiIntervals(); });
+  });
+  document.querySelectorAll(".spanbtn").forEach(function(b){
+    b.addEventListener("click",function(e){
+      var span=Number(e.currentTarget.getAttribute("data-span"))||1; cheapestSpan=Math.max(1,Math.min(3,span));
+      document.querySelectorAll(".spanbtn").forEach(function(x){ var on=Number(x.getAttribute("data-span"))===cheapestSpan; x.setAttribute("aria-pressed",on?"true":"false") });
+      if(viewMode==="hours") renderHourly12h();
+    });
+  });
+
+  /* sää UI */
+  qEl=document.getElementById('q'); sBox=document.getElementById('suggest'); btn=document.getElementById('btn');
+  weatherEl=document.getElementById('weather'); errEl=document.getElementById('err'); weatherHoursSel=document.getElementById('weatherHours');
+
+  var storedHours=Number(localStorage.getItem("weather_hours")||"6");
+  if(![6,12,24].includes(storedHours)) storedHours=6;
+  weatherHoursSel.value=String(storedHours);
+  weatherHoursSel.addEventListener('change', function(){
+    var v=Number(weatherHoursSel.value)||6; if(![6,12,24].includes(v)) v=6;
+    localStorage.setItem("weather_hours", String(v));
+    refreshWeatherFromStorage();
+  });
+
+  btn.addEventListener('click',function(){
+    hideSuggest();
+    var name=(qEl.value||"").trim(); if(!name){ showErr("Anna paikkakunnan nimi."); return }
+    geocode(name).then(function(results){
+      if(!results.length){ showErr("Paikkakuntaa ei löytynyt."); return }
+      var it=results[0];
+      var label=(it.name||"")+(it.admin1?(", "+it.admin1):"")+(it.country?(" ("+it.country+")"):"");
+      fetchWeather(it.latitude,it.longitude,label);
+    });
+  });
+
+  var typeTimer=null;
+  qEl.addEventListener('input',function(){
+    clearErr();
+    var name=(qEl.value||"").trim();
+    if(typeTimer) clearTimeout(typeTimer);
+    if(!name){ hideSuggest(); return; }
+    typeTimer=setTimeout(function(){
+      geocode(name).then(function(results){ showSuggest(results); });
+    },250);
+  });
+
+  sBox.addEventListener('click',function(e){
+    var item=e.target.closest('.suggest-item'); if(!item) return;
+    var lat=parseFloat(item.getAttribute('data-lat'));
+    var lon=parseFloat(item.getAttribute('data-lon'));
+    var label=decodeURIComponent(item.getAttribute('data-name')||"");
+    qEl.value=label.replace(/\s+/g,' ');
+    hideSuggest();
+    fetchWeather(lat,lon,label);
+  });
+
+  qEl.addEventListener('keydown',function(e){
+    if(e.key==='Enter'){ e.preventDefault(); btn.click(); }
+    if(e.key==='Escape'){ hideSuggest(); }
+  });
+  document.addEventListener('click',function(e){ if(!e.target.closest('.suggest')) hideSuggest(); });
+
+  (function restoreLast(){
+    var place=null;
+    try{
+      var label=localStorage.getItem("last_place_label");
+      var lat=parseFloat(localStorage.getItem("last_place_lat"));
+      var lon=parseFloat(localStorage.getItem("last_place_lon"));
+      if(label && isFinite(lat) && isFinite(lon)) place={label:label,lat:lat,lon:lon};
+    }catch(e){}
+    if(!place){ qEl.value="Helsinki (FI)"; place={label:"Helsinki (FI)",lat:60.17,lon:24.94}; }
+    qEl.value=place.label;
+    if(viewMode==="quarters"){ fetchWeather(place.lat,place.lon,place.label) }
+    startWeatherInterval();
+  })();
+});
+</script>
