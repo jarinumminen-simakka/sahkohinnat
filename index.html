@@ -14,6 +14,11 @@
   .row.next{font-size:48px;color:#eee}
   .time{letter-spacing:.5px}
   .price{font-variant-numeric:tabular-nums}
+  .trend-line{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:14px}
+  .trend-item{padding:4px 8px;border-radius:999px;border:1px solid transparent}
+  .trend-up{color:#f77;border-color:#f77}
+  .trend-down{color:#8f8;border-color:#8f8}
+  .trend-flat{color:#9cf;border-color:#9cf}
   .cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}
   .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
   #countdown{font-weight:600;margin-left:8px;color:#9cf}
@@ -56,6 +61,7 @@
   <div class="bar">
     <div>
       <div id="titleLine"></div>
+      <div id="trendLine" class="trend-line"></div>
       <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
     </div>
     <div class="group">
@@ -198,6 +204,38 @@ function sliceFourQuarters(prices){
   if(four.length<4 && idx>0){ var need=4-four.length; four=prices.slice(Math.max(0,idx-need),idx).concat(four) }
   return four;
 }
+function computeNextHourTrends(prices,currentPrice){
+  var nextHour=floorToHourLocal(new Date(Date.now()+60*60*1000));
+  var out=[];
+  for(var i=0;i<3;i++){
+    var hs=nextHour.getTime()+i*60*60*1000, he=hs+60*60*1000, sum=0,cnt=0;
+    for(var k=0;k<prices.length;k++){
+      var t=prices[k].ts;
+      if(t>=hs && t<he){ sum+=prices[k].val; cnt++; }
+      if(t>=he) break;
+    }
+    var avg=cnt?sum/cnt:NaN;
+    var diff=avg-currentPrice;
+    var dir=isFinite(avg)?(diff>0.001?"up":(diff<-0.001?"down":"flat")):"flat";
+    var arrow=dir==="up"?"↑":(dir==="down"?"↓":"→");
+    out.push({label:"+"+(i+1)+" h",avg:avg,dir:dir,arrow:arrow});
+  }
+  return out;
+}
+
+function renderTrendLine(trends){
+  var el=document.getElementById("trendLine");
+  if(!el) return;
+  if(!trends || !trends.length){ el.innerHTML=""; return; }
+  var html="";
+  for(var i=0;i<trends.length;i++){
+    var t=trends[i];
+    var txt=t.label+" "+t.arrow+" "+(isFinite(t.avg)?t.avg.toFixed(3)+" c/kWh":"-");
+    html+='<span class="trend-item trend-'+t.dir+'">'+txt+'</span>';
+  }
+  el.innerHTML=html;
+}
+
 function aggregate12h(prices){
   var base=floorToHourLocal(new Date());
   var hours=[]; for(var h=0;h<12;h++){ var d=new Date(base.getTime()+h*60*60*1000); hours.push({start:d.getTime(), label:pad2(d.getHours())+":00"}) }
@@ -223,6 +261,8 @@ function renderQuarters(){
   var now=new Date();
   return ensurePrices().then(function(prices){
     var four=sliceFourQuarters(prices);
+    var currentPrice=four.length?four[0].val:NaN;
+    renderTrendLine(computeNextHourTrends(prices,currentPrice));
     document.getElementById("titleLine").innerHTML='Tänään '+formatDateLocal(now)+' | Nyt: '+formatHHMMLocal(floorToQuarterLocal(now))+' <span id="countdown"></span>';
     var list=document.getElementById("list"); list.innerHTML="";
     for(var k=0;k<four.length;k++){
@@ -237,6 +277,7 @@ function renderHourly12h(){
   return ensurePrices().then(function(prices){
     var agg=aggregate12h(prices);
     document.getElementById("titleLine").textContent='Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen '+formatHHMMLocal(base)+')';
+    renderTrendLine([]);
     var list=document.getElementById("list"); list.innerHTML="";
     for(var r=0;r<agg.buckets.length;r++){
       var b=agg.buckets[r], within=(agg.bestStart>=0 && r>=agg.bestStart && r<agg.bestStart+agg.bestLen);
