@@ -20,6 +20,12 @@
   .trend-down{color:#8f8;border-color:#8f8}
   .trend-flat{color:#9cf;border-color:#9cf}
   .cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}
+  .vs-month{font-size:.45em;margin-left:10px;font-weight:600;white-space:nowrap}
+  .vs-month.low{color:#8f8}
+  .vs-month.high{color:#f77}
+  .vs-month.equal{color:#9cf}
+  .month-avg{font-size:14px;color:#ddd;margin-top:4px}
+  .month-avg b{color:#fff}
   .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
   #countdown{font-weight:600;margin-left:8px;color:#9cf}
 
@@ -62,7 +68,8 @@
     <div>
       <div id="titleLine"></div>
       <div id="trendLine" class="trend-line"></div>
-      <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
+      <div id="monthAvgLine" class="month-avg"></div>
+      <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Vihreä = alle kuukauden keskihinnan, punainen = yli • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
     </div>
     <div class="group">
       <button id="toggle" aria-pressed="false" title="Vaihda näkymää">Näytä: 12 h tuntikeskihinta</button>
@@ -167,6 +174,8 @@ function loadLS(key){try{var s=localStorage.getItem(key);return s?JSON.parse(s):
 var viewMode="quarters", cheapestSpan=1;
 var countdownInterval=null, rerenderInterval=null;
 var pricesCacheKey="prices_cache_v1";
+var monthAvgCacheKey="month_avg_cache_v1";
+var monthAvgPromise=null;
 
 function nextDailyRefreshTs(){
   var now=new Date();
@@ -196,6 +205,54 @@ function ensurePrices(){
     saveLS(pricesCacheKey,{day:todayKey,fetchedAt:Date.now(),validUntil:nextDailyRefreshTs(),start:start.getTime(),end:end.getTime(),prices:prices});
     return prices;
   });
+}
+function monthStartLocal(d){ return new Date(d.getFullYear(),d.getMonth(),1,0,0,0,0); }
+function monthKeyLocal(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1); }
+function meanPrice(rows){
+  var sum=0,cnt=0;
+  for(var i=0;i<rows.length;i++){
+    var v=Number(rows[i]&&rows[i].val);
+    if(isFinite(v)){ sum+=v; cnt++; }
+  }
+  return cnt?sum/cnt:NaN;
+}
+function ensureMonthAverage(){
+  var now=new Date();
+  var mk=monthKeyLocal(now);
+  var cached=loadLS(monthAvgCacheKey);
+  if(cached && cached.month===mk && isFinite(cached.avg) && cached.validUntil && Date.now()<cached.validUntil){
+    return Promise.resolve(Number(cached.avg));
+  }
+  if(monthAvgPromise) return monthAvgPromise;
+  monthAvgPromise=fetchPricesWindow(monthStartLocal(now), new Date(now.getTime()+36*60*60*1000))
+    .then(function(rows){
+      var avg=meanPrice(rows);
+      saveLS(monthAvgCacheKey,{month:mk,avg:avg,fetchedAt:Date.now(),validUntil:nextDailyRefreshTs()});
+      monthAvgPromise=null;
+      return avg;
+    })
+    .catch(function(e){ monthAvgPromise=null; throw e; });
+  return monthAvgPromise;
+}
+function compareClassToMonth(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return "equal";
+  var diff=v-avg;
+  if(diff<-0.001) return "low";
+  if(diff>0.001) return "high";
+  return "equal";
+}
+function compareTextToMonth(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return "";
+  var diff=v-avg;
+  if(Math.abs(diff)<=0.001) return "≈ kuukauden keskihinta";
+  return (diff<0?"alle":"yli")+" keskiarvon " + Math.abs(diff).toFixed(3)+" c";
+}
+function renderMonthAverageLine(avg){
+  var el=document.getElementById("monthAvgLine");
+  if(!el) return;
+  var now=new Date();
+  var label='Kuukauden tähän asti tiedossa oleva painottamaton pörssisähkön keskihinta ('+pad2(now.getMonth()+1)+'.'+now.getFullYear()+'):';
+  el.innerHTML=label+' <b>'+(isFinite(avg)?avg.toFixed(3)+' c/kWh':'-')+'</b>';
 }
 function sliceFourQuarters(prices){
   var now=Date.now(), qMs=15*60*1000, idx=0;
@@ -259,30 +316,36 @@ function updateCountdown(){
 }
 function renderQuarters(){
   var now=new Date();
-  return ensurePrices().then(function(prices){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
     var four=sliceFourQuarters(prices);
     var currentPrice=four.length?four[0].val:NaN;
     renderTrendLine(computeNextHourTrends(prices,currentPrice));
+    renderMonthAverageLine(monthAvg);
     document.getElementById("titleLine").innerHTML='Tänään '+formatDateLocal(now)+' | Nyt: '+formatHHMMLocal(floorToQuarterLocal(now))+' <span id="countdown"></span>';
     var list=document.getElementById("list"); list.innerHTML="";
     for(var k=0;k<four.length;k++){
       var p=four[k], row=document.createElement("div"); row.className="row "+(k===0?"now":"next")+" "+priceClass(p.val);
-      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+p.val.toFixed(3)+' c/kWh</div>';
+      var cmpClass=compareClassToMonth(p.val,monthAvg), cmpText=compareTextToMonth(p.val,monthAvg);
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+p.val.toFixed(3)+' c/kWh'+(cmpText?('<span class="vs-month '+cmpClass+'">'+cmpText+'</span>'):"")+'</div>';
       list.appendChild(row);
     }
   });
 }
 function renderHourly12h(){
   var base=floorToHourLocal(new Date());
-  return ensurePrices().then(function(prices){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
     var agg=aggregate12h(prices);
+    renderMonthAverageLine(monthAvg);
     document.getElementById("titleLine").textContent='Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen '+formatHHMMLocal(base)+')';
     renderTrendLine([]);
     var list=document.getElementById("list"); list.innerHTML="";
     for(var r=0;r<agg.buckets.length;r++){
       var b=agg.buckets[r], within=(agg.bestStart>=0 && r>=agg.bestStart && r<agg.bestStart+agg.bestLen);
       var row=document.createElement("div"); row.className="row next "+priceClass(b.avg)+(within?" highlight":"");
-      row.innerHTML='<div class="time">'+b.label+'</div><div class="price">'+(isFinite(b.avg)?b.avg.toFixed(3):"-")+' c/kWh</div>';
+      var cmpClass=compareClassToMonth(b.avg,monthAvg), cmpText=compareTextToMonth(b.avg,monthAvg);
+      row.innerHTML='<div class="time">'+b.label+'</div><div class="price">'+(isFinite(b.avg)?b.avg.toFixed(3):"-")+' c/kWh'+(cmpText?('<span class="vs-month '+cmpClass+'">'+cmpText+'</span>'):"")+'</div>';
       list.appendChild(row);
     }
   });
