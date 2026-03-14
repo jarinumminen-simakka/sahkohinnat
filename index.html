@@ -300,6 +300,38 @@ function renderTrendLine(trends){
   el.innerHTML=html;
 }
 
+function quarterLevelStyle(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return '';
+  var diff=v-avg;
+  var intensity=Math.min(1, Math.abs(diff)/8); /* 8 c/kWh => max */
+  var alpha=(0.14 + intensity*0.42).toFixed(3);
+  var border=(0.25 + intensity*0.55).toFixed(3);
+  if(diff<0){ return 'background:rgba(25,130,50,'+alpha+');border-left:6px solid rgba(90,255,130,'+border+');'; }
+  if(diff>0){ return 'background:rgba(150,30,30,'+alpha+');border-left:6px solid rgba(255,120,120,'+border+');'; }
+  return 'background:rgba(60,80,110,0.30);border-left:6px solid rgba(150,190,255,0.55);';
+}
+function relationText(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return 'Vertailutieto puuttuu – käytä harkintaa.';
+  var diff=v-avg, ad=Math.abs(diff);
+  if(ad<=0.25) return 'Neutraali hetki – käytä sähköä normaalisti.';
+  if(diff<=-4) return 'Sähköä voi käyttää vapaasti – nyt on harvinaisen hyvä hetki ⚡';
+  if(diff<=-2) return 'Hyvä hetki käyttää sähköä – anna pyykkikoneelle töitä.';
+  if(diff<0) return 'Hieman keskihintaa halvempi – käyttö ok.';
+  if(diff<2) return 'Hieman keskihintaa kalliimpi – siirrä käyttöä jos pystyt.';
+  if(diff<4) return 'Sähkönkäyttöä on vältettävä, jos ajoituksen voi valita.';
+  return 'Punainen hälytys: siirrä isot kulutukset myöhemmäksi 😅';
+}
+function sliceUpcomingQuarters(prices,count){
+  var now=Date.now(), qMs=15*60*1000, idx=-1;
+  for(var i=0;i<prices.length;i++){
+    var s=prices[i].ts, e=s+qMs;
+    if(now>=s && now<e){ idx=i; break; }
+    if(idx===-1 && now<s) idx=i;
+  }
+  if(idx===-1) idx=Math.max(0, prices.length-count);
+  return prices.slice(idx, idx+count);
+}
+
 function aggregate12h(prices){
   var base=floorToHourLocal(new Date());
   var hours=[]; for(var h=0;h<12;h++){ var d=new Date(base.getTime()+h*60*60*1000); hours.push({start:d.getTime(), label:pad2(d.getHours())+":00"}) }
@@ -357,6 +389,28 @@ function renderHourly12h(){
     }
   });
 }
+function renderRelativeToMonth(){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
+    var quarters=sliceUpcomingQuarters(prices,12);
+    renderMonthAverageLine(monthAvg);
+    document.getElementById("titleLine").textContent='Kulutusohjaus kuukauden keskihintaan verrattuna';
+    renderTrendLine([]);
+    var list=document.getElementById("list"); list.innerHTML="";
+    for(var i=0;i<quarters.length;i++){
+      var p=quarters[i], row=document.createElement('div');
+      row.className='row next';
+      row.setAttribute('style', quarterLevelStyle(p.val, monthAvg));
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+relationText(p.val,monthAvg)+'</div>';
+      list.appendChild(row);
+    }
+    var note=document.createElement('div');
+    note.className='month-only-note';
+    note.textContent='Nyrkkisääntö: vihreä = hyvä hetki käyttää, punainen = kahvi ensin ja kulutus myöhemmin.';
+    list.appendChild(note);
+  });
+}
+
 function renderPrices(){
   var chooser=document.getElementById("spanChooser");
   var weatherWrap=document.getElementById("weatherWrap");
@@ -364,16 +418,30 @@ function renderPrices(){
     chooser.classList.add("hidden");
     weatherWrap.classList.remove("hidden");
     return renderQuarters().then(function(){ updateCountdown(); refreshWeatherFromStorage(); });
-  }else{
+  }
+  if(viewMode==="hours"){
     chooser.classList.remove("hidden");
     weatherWrap.classList.add("hidden");
     return renderHourly12h();
   }
+  chooser.classList.add("hidden");
+  weatherWrap.classList.add("hidden");
+  return renderRelativeToMonth();
 }
 function applyToggleButton(){
   var btn=document.getElementById("toggle");
-  if(viewMode==="quarters"){ btn.textContent="Näytä: 12 h tuntikeskihinta"; btn.setAttribute("aria-pressed","false"); }
-  else { btn.textContent="Näytä: nyt + 3 varttia"; btn.setAttribute("aria-pressed","true"); }
+  if(viewMode==="quarters"){
+    btn.textContent="Näytä: 12 h tuntikeskihinta";
+    btn.setAttribute("aria-pressed","false");
+    return;
+  }
+  if(viewMode==="hours"){
+    btn.textContent="Näytä: alle/yli keskihinta";
+    btn.setAttribute("aria-pressed","true");
+    return;
+  }
+  btn.textContent="Näytä: nyt + 3 varttia";
+  btn.setAttribute("aria-pressed","true");
 }
 
 /* ===== Sää (cache 6 h) ===== */
@@ -517,7 +585,7 @@ document.addEventListener("DOMContentLoaded",function(){
   renderPrices(); startUiIntervals();
   var toggleBtn=document.getElementById("toggle"); applyToggleButton();
   toggleBtn.addEventListener("click",function(){
-    viewMode=(viewMode==="quarters")?"hours":"quarters";
+    viewMode=(viewMode==="quarters")?"hours":((viewMode==="hours")?"relative":"quarters");
     applyToggleButton();
     renderPrices().then(function(){ startUiIntervals(); });
   });
