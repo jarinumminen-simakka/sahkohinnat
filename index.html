@@ -25,7 +25,6 @@
   .vs-month.high{color:#f77}
   .vs-month.equal{color:#9cf}
   .month-avg{font-size:14px;color:#ddd;margin-top:4px}
-  .month-avg b{color:#fff}
   .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
   #countdown{font-weight:600;margin-left:8px;color:#9cf}
 
@@ -251,14 +250,22 @@ function renderMonthAverageLine(avg){
   var el=document.getElementById("monthAvgLine");
   if(!el) return;
   var now=new Date();
-  var label='Kuukauden painottamaton pörssisähkön ka. ('+pad2(now.getMonth()+1)+'.'+now.getFullYear()+'):';
-  el.innerHTML=label+' <b>'+(isFinite(avg)?avg.toFixed(3)+' c/kWh':'-')+'</b>';
+  var label='Kuukauden painottamaton pörssisähkön ka. ('+pad2(now.getMonth()+1)+'.'+now.getFullYear()+'): ';
+  el.textContent=label+(isFinite(avg)?avg.toFixed(3)+' c/kWh':'-');
 }
 function sliceFourQuarters(prices){
-  var now=Date.now(), qMs=15*60*1000, idx=0;
-  for(var i=0;i<prices.length;i++){ var s=prices[i].ts, e=s+qMs; if(now>=s && now<e){ idx=i; break; } }
+  var now=Date.now(), qMs=15*60*1000, idx=-1;
+  for(var i=0;i<prices.length;i++){
+    var s=prices[i].ts, e=s+qMs;
+    if(now>=s && now<e){ idx=i; break; }
+    if(idx===-1 && now<s) idx=i;
+  }
+  if(idx===-1) idx=Math.max(0, prices.length-1);
   var four=prices.slice(idx,idx+4);
-  if(four.length<4 && idx>0){ var need=4-four.length; four=prices.slice(Math.max(0,idx-need),idx).concat(four) }
+  if(four.length<4 && idx>0){
+    var need=4-four.length;
+    four=prices.slice(Math.max(0,idx-need),idx).concat(four);
+  }
   return four;
 }
 function computeNextHourTrends(prices,currentPrice){
