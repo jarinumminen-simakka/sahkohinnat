@@ -6,31 +6,41 @@
   html,body{background:#000;color:#fff;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial,sans-serif}
   header,footer{text-align:center;padding:12px;color:#ddd}
   .container{max-width:1200px;margin:0 auto}
-  .bar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .bar{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"info controls" "search search";gap:10px 16px;align-items:start}
 
   /* sähkö */
   .row{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1px solid #111;transition:background .15s}
   .row.now{font-size:64px}
   .row.next{font-size:48px;color:#eee}
-  .time{letter-spacing:.5px}
-  .price{font-variant-numeric:tabular-nums}
+  .time{letter-spacing:.5px;white-space:nowrap}
+  .price{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .row.relative{font-size:30px;color:#eee;padding:12px 16px}
+  .row.relative .price{font-size:.62em;max-width:65vw;overflow:hidden;text-overflow:ellipsis;text-align:right}
   .trend-line{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:14px}
   .trend-item{padding:4px 8px;border-radius:999px;border:1px solid transparent}
   .trend-up{color:#f77;border-color:#f77}
   .trend-down{color:#8f8;border-color:#8f8}
   .trend-flat{color:#9cf;border-color:#9cf}
   .cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}
+  .month-avg{font-size:14px;color:#ddd;margin-top:4px}
+  .month-only-note{font-size:12px;color:#bbb;margin-top:8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
   #countdown{font-weight:600;margin-left:8px;color:#9cf}
 
   /* napit */
   #toggle,.spanbtn,button{-webkit-appearance:none;appearance:none;border:1px solid #333;background:#111;color:#eee;padding:8px 14px;border-radius:10px;cursor:pointer;font-size:14px}
+  #toggle{min-width:230px}
   #toggle:hover,.spanbtn:hover,button:hover{background:#151515}
   select{border:1px solid #333;background:#111;color:#eee;padding:8px 10px;border-radius:10px;font-size:14px}
   .group{display:flex;align-items:center;gap:8px}
+
+  .info{grid-area:info;min-width:0;text-align:left}
+  #modeControls{grid-area:controls;justify-self:end;align-self:start;flex-wrap:nowrap;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .searchbar{grid-area:search;justify-content:center}
+  #spanChooser{justify-content:flex-end;width:100%}
   .spanbtn[aria-pressed="true"]{background:#1e2a1e;border-color:#3fa73f;color:#cfe9cf}
   .hidden{display:none!important}
-  #legend{font-size:12px;color:#aaa}
+  #legend{font-size:12px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 
   /* sää */
   #weatherWrap{padding:8px 12px;margin:8px auto}
@@ -55,16 +65,26 @@
   .suggest-item:last-child{border-bottom:none}
   .suggest-item:hover{background:#1a1a1a}
   input[type="text"]{width:260px;max-width:90vw;padding:8px 10px;border-radius:10px;border:1px solid #333;background:#111;color:#fff}
+
+  @media (max-width: 980px){
+    .bar{grid-template-columns:1fr;grid-template-areas:"controls" "info" "search"}
+    #modeControls{justify-self:start;align-items:flex-start}
+    #spanChooser{justify-content:flex-start}
+    .row.relative{font-size:24px}
+    .row.relative .price{max-width:58vw}
+  }
+
 </style>
 
 <header class="container">
   <div class="bar">
-    <div>
+    <div class="info">
       <div id="titleLine"></div>
       <div id="trendLine" class="trend-line"></div>
-      <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
+      <div id="monthAvgLine" class="month-avg"></div>
+      <div id="legend">Näkymät: vartit ↔ 12h ↔ ohjaus • Vihreä/punainen voimistuu eron mukaan.</div>
     </div>
-    <div class="group">
+    <div id="modeControls" class="group">
       <button id="toggle" aria-pressed="false" title="Vaihda näkymää">Näytä: 12 h tuntikeskihinta</button>
       <div id="spanChooser" class="group hidden" aria-label="Halvimman jakson pituus">
         <span style="font-size:12px;color:#aaa">Korosta halvin jakso:</span>
@@ -167,6 +187,8 @@ function loadLS(key){try{var s=localStorage.getItem(key);return s?JSON.parse(s):
 var viewMode="quarters", cheapestSpan=1;
 var countdownInterval=null, rerenderInterval=null;
 var pricesCacheKey="prices_cache_v1";
+var monthAvgCacheKey="month_avg_cache_v1";
+var monthAvgPromise=null;
 
 function nextDailyRefreshTs(){
   var now=new Date();
@@ -197,11 +219,54 @@ function ensurePrices(){
     return prices;
   });
 }
+function monthStartLocal(d){ return new Date(d.getFullYear(),d.getMonth(),1,0,0,0,0); }
+function monthKeyLocal(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1); }
+function meanPrice(rows){
+  var sum=0,cnt=0;
+  for(var i=0;i<rows.length;i++){
+    var v=Number(rows[i]&&rows[i].val);
+    if(isFinite(v)){ sum+=v; cnt++; }
+  }
+  return cnt?sum/cnt:NaN;
+}
+function ensureMonthAverage(){
+  var now=new Date();
+  var mk=monthKeyLocal(now);
+  var cached=loadLS(monthAvgCacheKey);
+  if(cached && cached.month===mk && isFinite(cached.avg) && cached.validUntil && Date.now()<cached.validUntil){
+    return Promise.resolve(Number(cached.avg));
+  }
+  if(monthAvgPromise) return monthAvgPromise;
+  monthAvgPromise=fetchPricesWindow(monthStartLocal(now), new Date(now.getTime()+36*60*60*1000))
+    .then(function(rows){
+      var avg=meanPrice(rows);
+      saveLS(monthAvgCacheKey,{month:mk,avg:avg,fetchedAt:Date.now(),validUntil:nextDailyRefreshTs()});
+      monthAvgPromise=null;
+      return avg;
+    })
+    .catch(function(e){ monthAvgPromise=null; throw e; });
+  return monthAvgPromise;
+}
+function renderMonthAverageLine(avg){
+  var el=document.getElementById("monthAvgLine");
+  if(!el) return;
+  var now=new Date();
+  var label='Kuukauden painottamaton pörssisähkön ka. ('+pad2(now.getMonth()+1)+'.'+now.getFullYear()+'): ';
+  el.textContent=label+(isFinite(avg)?avg.toFixed(3)+' c/kWh':'-');
+}
 function sliceFourQuarters(prices){
-  var now=Date.now(), qMs=15*60*1000, idx=0;
-  for(var i=0;i<prices.length;i++){ var s=prices[i].ts, e=s+qMs; if(now>=s && now<e){ idx=i; break; } }
+  var now=Date.now(), qMs=15*60*1000, idx=-1;
+  for(var i=0;i<prices.length;i++){
+    var s=prices[i].ts, e=s+qMs;
+    if(now>=s && now<e){ idx=i; break; }
+    if(idx===-1 && now<s) idx=i;
+  }
+  if(idx===-1) idx=Math.max(0, prices.length-1);
   var four=prices.slice(idx,idx+4);
-  if(four.length<4 && idx>0){ var need=4-four.length; four=prices.slice(Math.max(0,idx-need),idx).concat(four) }
+  if(four.length<4 && idx>0){
+    var need=4-four.length;
+    four=prices.slice(Math.max(0,idx-need),idx).concat(four);
+  }
   return four;
 }
 function computeNextHourTrends(prices,currentPrice){
@@ -236,6 +301,38 @@ function renderTrendLine(trends){
   el.innerHTML=html;
 }
 
+function quarterLevelStyle(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return '';
+  var diff=v-avg;
+  var intensity=Math.min(1, Math.abs(diff)/8); /* 8 c/kWh => max */
+  var alpha=(0.14 + intensity*0.42).toFixed(3);
+  var border=(0.25 + intensity*0.55).toFixed(3);
+  if(diff<0){ return 'background:rgba(25,130,50,'+alpha+');border-left:6px solid rgba(90,255,130,'+border+');'; }
+  if(diff>0){ return 'background:rgba(150,30,30,'+alpha+');border-left:6px solid rgba(255,120,120,'+border+');'; }
+  return 'background:rgba(60,80,110,0.30);border-left:6px solid rgba(150,190,255,0.55);';
+}
+function relationText(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return 'Ei vertailutietoa';
+  var diff=v-avg, ad=Math.abs(diff);
+  if(ad<=0.25) return 'Neutraali';
+  if(diff<=-4) return 'Sähköä voi käyttää vapaasti ⚡';
+  if(diff<=-2) return 'Hyvä hetki käyttää';
+  if(diff<0) return 'Käyttö ok';
+  if(diff<2) return 'Siirrä jos voit';
+  if(diff<4) return 'Sähkönkäyttöä on vältettävä';
+  return 'Vältä kulutusta nyt 😅';
+}
+function sliceUpcomingQuarters(prices,count){
+  var now=Date.now(), qMs=15*60*1000, idx=-1;
+  for(var i=0;i<prices.length;i++){
+    var s=prices[i].ts, e=s+qMs;
+    if(now>=s && now<e){ idx=i; break; }
+    if(idx===-1 && now<s) idx=i;
+  }
+  if(idx===-1) idx=Math.max(0, prices.length-count);
+  return prices.slice(idx, idx+count);
+}
+
 function aggregate12h(prices){
   var base=floorToHourLocal(new Date());
   var hours=[]; for(var h=0;h<12;h++){ var d=new Date(base.getTime()+h*60*60*1000); hours.push({start:d.getTime(), label:pad2(d.getHours())+":00"}) }
@@ -259,10 +356,12 @@ function updateCountdown(){
 }
 function renderQuarters(){
   var now=new Date();
-  return ensurePrices().then(function(prices){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
     var four=sliceFourQuarters(prices);
     var currentPrice=four.length?four[0].val:NaN;
     renderTrendLine(computeNextHourTrends(prices,currentPrice));
+    renderMonthAverageLine(monthAvg);
     document.getElementById("titleLine").innerHTML='Tänään '+formatDateLocal(now)+' | Nyt: '+formatHHMMLocal(floorToQuarterLocal(now))+' <span id="countdown"></span>';
     var list=document.getElementById("list"); list.innerHTML="";
     for(var k=0;k<four.length;k++){
@@ -274,8 +373,10 @@ function renderQuarters(){
 }
 function renderHourly12h(){
   var base=floorToHourLocal(new Date());
-  return ensurePrices().then(function(prices){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
     var agg=aggregate12h(prices);
+    renderMonthAverageLine(monthAvg);
     document.getElementById("titleLine").textContent='Seuraavat 12 tuntia – kellotunnin keskihinta (alkaen '+formatHHMMLocal(base)+')';
     renderTrendLine([]);
     var list=document.getElementById("list"); list.innerHTML="";
@@ -287,6 +388,28 @@ function renderHourly12h(){
     }
   });
 }
+function renderRelativeToMonth(){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
+    var quarters=sliceUpcomingQuarters(prices,12);
+    renderMonthAverageLine(monthAvg);
+    document.getElementById("titleLine").textContent='Kulutusohjaus vs kuukauden keskihinta';
+    renderTrendLine([]);
+    var list=document.getElementById("list"); list.innerHTML="";
+    for(var i=0;i<quarters.length;i++){
+      var p=quarters[i], row=document.createElement('div');
+      row.className='row relative';
+      row.setAttribute('style', quarterLevelStyle(p.val, monthAvg));
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+relationText(p.val,monthAvg)+'</div>';
+      list.appendChild(row);
+    }
+    var note=document.createElement('div');
+    note.className='month-only-note';
+    note.textContent='Vihreä: käytä • Punainen: jarruta.';
+    list.appendChild(note);
+  });
+}
+
 function renderPrices(){
   var chooser=document.getElementById("spanChooser");
   var weatherWrap=document.getElementById("weatherWrap");
@@ -294,16 +417,30 @@ function renderPrices(){
     chooser.classList.add("hidden");
     weatherWrap.classList.remove("hidden");
     return renderQuarters().then(function(){ updateCountdown(); refreshWeatherFromStorage(); });
-  }else{
+  }
+  if(viewMode==="hours"){
     chooser.classList.remove("hidden");
     weatherWrap.classList.add("hidden");
     return renderHourly12h();
   }
+  chooser.classList.add("hidden");
+  weatherWrap.classList.add("hidden");
+  return renderRelativeToMonth();
 }
 function applyToggleButton(){
   var btn=document.getElementById("toggle");
-  if(viewMode==="quarters"){ btn.textContent="Näytä: 12 h tuntikeskihinta"; btn.setAttribute("aria-pressed","false"); }
-  else { btn.textContent="Näytä: nyt + 3 varttia"; btn.setAttribute("aria-pressed","true"); }
+  if(viewMode==="quarters"){
+    btn.textContent="Näytä: 12 h tuntikeskihinta";
+    btn.setAttribute("aria-pressed","false");
+    return;
+  }
+  if(viewMode==="hours"){
+    btn.textContent="Näytä: alle/yli keskihinta";
+    btn.setAttribute("aria-pressed","true");
+    return;
+  }
+  btn.textContent="Näytä: nyt + 3 varttia";
+  btn.setAttribute("aria-pressed","true");
 }
 
 /* ===== Sää (cache 6 h) ===== */
@@ -447,7 +584,7 @@ document.addEventListener("DOMContentLoaded",function(){
   renderPrices(); startUiIntervals();
   var toggleBtn=document.getElementById("toggle"); applyToggleButton();
   toggleBtn.addEventListener("click",function(){
-    viewMode=(viewMode==="quarters")?"hours":"quarters";
+    viewMode=(viewMode==="quarters")?"hours":((viewMode==="hours")?"relative":"quarters");
     applyToggleButton();
     renderPrices().then(function(){ startUiIntervals(); });
   });
