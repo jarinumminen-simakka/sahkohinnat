@@ -14,8 +14,8 @@
   .row.next{font-size:48px;color:#eee}
   .time{letter-spacing:.5px;white-space:nowrap}
   .price{font-variant-numeric:tabular-nums;white-space:nowrap}
-  .row.relative{font-size:30px;color:#eee;padding:12px 16px}
-  .row.relative .price{font-size:.62em;max-width:65vw;overflow:hidden;text-overflow:ellipsis;text-align:right}
+  .row.relative{font-size:34px;color:#eee;padding:12px 16px}
+  .row.relative .price{font-size:.68em;max-width:65vw;overflow:hidden;text-overflow:ellipsis;text-align:right}
   .trend-line{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:14px}
   .trend-item{padding:4px 8px;border-radius:999px;border:1px solid transparent}
   .trend-up{color:#f77;border-color:#f77}
@@ -73,7 +73,7 @@
     .bar{grid-template-columns:1fr;grid-template-areas:"controls" "info" "search"}
     #modeControls{justify-self:start;align-items:flex-start}
     #spanChooser{justify-content:flex-start}
-    .row.relative{font-size:24px}
+    .row.relative{font-size:28px}
     .row.relative .price{max-width:58vw}
   }
 
@@ -85,7 +85,7 @@
       <div id="titleLine"></div>
       <div id="trendLine" class="trend-line"></div>
       <div id="monthAvgLine" class="month-avg"></div>
-      <div id="legend">Vaihda näkymää: vartit ↔ 12h tuntikeskiarvo • Vihreä = alle kuukauden keskihinnan, punainen = yli • Lähteet: sahkotin.fi & Open-Meteo • Verkkopyynnöt: sähkö 1×/pv, sää 6 h välein</div>
+      <div id="legend">Näkymät: vartit ↔ 12h ↔ ohjaus • Vihreä/punainen voimistuu eron mukaan.</div>
     </div>
     <div id="modeControls" class="group">
       <button id="toggle" aria-pressed="false" title="Vaihda näkymää">Näytä: 12 h tuntikeskihinta</button>
@@ -437,7 +437,7 @@ function renderRelativeToMonth(){
     var list=document.getElementById("list"); list.innerHTML="";
     for(var i=0;i<quarters.length;i++){
       var p=quarters[i], row=document.createElement('div');
-      row.className='row relative';
+      row.className='row relative '+priceClass(p.val);
       row.setAttribute('style', quarterLevelStyle(p.val, monthAvg));
       row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+relationText(p.val,monthAvg)+'</div>';
       list.appendChild(row);
