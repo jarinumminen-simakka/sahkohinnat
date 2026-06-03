@@ -161,6 +161,11 @@ while(k<len){var cur=O[k];if(cur===search||(typeof cur==='number'&&typeof search
 <script>
 /* ===== Perusapuja ===== */
 var apiPrices="https://sahkotin.fi/prices";
+var apiPriceSources=[
+  {name:"Oma hintaproxy",type:"sahkotin",url:"/api/prices"},
+  {name:"sahkotin.fi",type:"sahkotin",url:apiPrices},
+  {name:"porssisahko.net",type:"porssisahkoLatest",url:"https://api.porssisahko.net/v1/latest-prices.json",maxWindowHours:72}
+];
 var apiGeo="https://geocoding-api.open-meteo.com/v1/search";
 var apiWeather="https://api.open-meteo.com/v1/forecast";
 
@@ -199,14 +204,45 @@ function nextDailyRefreshTs(){
   if(now>=target) target=new Date(target.getTime()+24*60*60*1000);
   return target.getTime();
 }
-function fetchPricesWindow(start,end){
-  var url=apiPrices+"?quarter&fix&vat&start="+toIsoZ(start)+"&end="+toIsoZ(end);
+function normalizeSahkotinPrices(data){
+  return (data.prices||[]).map(function(p){ return { ts:(new Date(p.date)).getTime(), val:Number(p.value) }})
+                          .filter(function(p){ return isFinite(p.ts) && isFinite(p.val); })
+                          .sort(function(a,b){ return a.ts-b.ts });
+}
+function normalizePorssisahkoLatest(data,start,end){
+  var out=[], qMs=15*60*1000;
+  var rows=(data&&data.prices)||[];
+  for(var i=0;i<rows.length;i++){
+    var p=rows[i], hs=(new Date(p.startDate)).getTime(), he=(new Date(p.endDate)).getTime(), val=Number(p.price);
+    if(!isFinite(hs)||!isFinite(he)||!isFinite(val)) continue;
+    for(var t=hs;t<he;t+=qMs){
+      if(t>=start.getTime() && t<end.getTime()) out.push({ts:t,val:val});
+    }
+  }
+  return out.sort(function(a,b){ return a.ts-b.ts; });
+}
+function fetchPriceSource(source,start,end){
+  var url=source.url;
+  if(source.maxWindowHours && (end.getTime()-start.getTime())>source.maxWindowHours*60*60*1000){
+    return Promise.reject(new Error(source.name+" ei tue näin pitkää aikaväliä"));
+  }
+  if(source.type==="sahkotin") url=source.url+"?quarter&fix&vat&start="+toIsoZ(start)+"&end="+toIsoZ(end);
   return fetch(url,{cache:"no-store"})
-    .then(function(res){ if(!res.ok) throw new Error("Hinta API "+res.status); return res.json(); })
+    .then(function(res){ if(!res.ok) throw new Error(source.name+" "+res.status); return res.json(); })
     .then(function(data){
-      return (data.prices||[]).map(function(p){ return { ts:(new Date(p.date)).getTime(), val:Number(p.value) }})
-                              .sort(function(a,b){ return a.ts-b.ts });
+      var prices=source.type==="porssisahkoLatest" ? normalizePorssisahkoLatest(data,start,end) : normalizeSahkotinPrices(data);
+      if(!prices.length) throw new Error(source.name+" ei palauttanut hintoja");
+      return prices;
     });
+}
+function fetchPricesWindow(start,end){
+  var i=0, errors=[];
+  function next(){
+    var source=apiPriceSources[i++];
+    if(!source) throw new Error("Hintoja ei saatu: "+errors.join("; "));
+    return fetchPriceSource(source,start,end).catch(function(e){ errors.push(e.message); return next(); });
+  }
+  return next();
 }
 function ensurePrices(){
   var now=new Date();
