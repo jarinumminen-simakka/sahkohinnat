@@ -22,8 +22,11 @@
   .trend-down{color:#8f8;border-color:#8f8}
   .trend-flat{color:#9cf;border-color:#9cf}
   .cheap .price{color:#8f8}.ok .price{color:#fff}.high .price{color:#fc6}.spike .price{color:#f77}
+  .vs-month{font-size:.4em;margin-left:8px;font-weight:600;white-space:nowrap}
+  .vs-month.low{color:#8f8}
+  .vs-month.high{color:#f77}
+  .vs-month.equal{color:#9cf}
   .month-avg{font-size:14px;color:#ddd;margin-top:4px}
-  .month-only-note{font-size:12px;color:#bbb;margin-top:8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .highlight{background:#0f1a10;outline:2px solid #3fa73f}.highlight .price{font-weight:700}
   #countdown{font-weight:600;margin-left:8px;color:#9cf}
 
@@ -283,6 +286,19 @@ function ensureMonthAverage(){
     .catch(function(e){ monthAvgPromise=null; throw e; });
   return monthAvgPromise;
 }
+function compareClassToMonth(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return "equal";
+  var diff=v-avg;
+  if(diff<-0.001) return "low";
+  if(diff>0.001) return "high";
+  return "equal";
+}
+function compareTextToMonth(v,avg){
+  if(!isFinite(v)||!isFinite(avg)) return "";
+  var diff=v-avg;
+  if(Math.abs(diff)<=0.001) return "≈ kuukauden keskihinta";
+  return (diff<0?"alle":"yli")+" " + Math.abs(diff).toFixed(3)+" c";
+}
 function renderMonthAverageLine(avg){
   var el=document.getElementById("monthAvgLine");
   if(!el) return;
@@ -402,7 +418,8 @@ function renderQuarters(){
     var list=document.getElementById("list"); list.innerHTML="";
     for(var k=0;k<four.length;k++){
       var p=four[k], row=document.createElement("div"); row.className="row "+(k===0?"now":"next")+" "+priceClass(p.val);
-      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+p.val.toFixed(3)+' c/kWh</div>';
+      var cmpClass=compareClassToMonth(p.val,monthAvg), cmpText=compareTextToMonth(p.val,monthAvg);
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+p.val.toFixed(3)+' c/kWh'+(cmpText?('<span class="vs-month '+cmpClass+'">'+cmpText+'</span>'):"")+'</div>';
       list.appendChild(row);
     }
   });
@@ -419,9 +436,31 @@ function renderHourly12h(){
     for(var r=0;r<agg.buckets.length;r++){
       var b=agg.buckets[r], within=(agg.bestStart>=0 && r>=agg.bestStart && r<agg.bestStart+agg.bestLen);
       var row=document.createElement("div"); row.className="row next "+priceClass(b.avg)+(within?" highlight":"");
-      row.innerHTML='<div class="time">'+b.label+'</div><div class="price">'+(isFinite(b.avg)?b.avg.toFixed(3):"-")+' c/kWh</div>';
+      var cmpClass=compareClassToMonth(b.avg,monthAvg), cmpText=compareTextToMonth(b.avg,monthAvg);
+      row.innerHTML='<div class="time">'+b.label+'</div><div class="price">'+(isFinite(b.avg)?b.avg.toFixed(3):"-")+' c/kWh'+(cmpText?('<span class="vs-month '+cmpClass+'">'+cmpText+'</span>'):"")+'</div>';
       list.appendChild(row);
     }
+  });
+}
+function renderRelativeToMonth(){
+  return Promise.all([ensurePrices(), ensureMonthAverage().catch(function(){ return NaN; })]).then(function(res){
+    var prices=res[0], monthAvg=res[1];
+    var quarters=sliceUpcomingQuarters(prices,12);
+    renderMonthAverageLine(monthAvg);
+    document.getElementById("titleLine").textContent='Kulutusohjaus kuukauden keskihintaan verrattuna';
+    renderTrendLine([]);
+    var list=document.getElementById("list"); list.innerHTML="";
+    for(var i=0;i<quarters.length;i++){
+      var p=quarters[i], row=document.createElement('div');
+      row.className='row next';
+      row.setAttribute('style', quarterLevelStyle(p.val, monthAvg));
+      row.innerHTML='<div class="time">'+formatHHMMLocal(new Date(p.ts))+'</div><div class="price">'+relationText(p.val,monthAvg)+'</div>';
+      list.appendChild(row);
+    }
+    var note=document.createElement('div');
+    note.className='month-only-note';
+    note.textContent='Nyrkkisääntö: vihreä = hyvä hetki käyttää, punainen = kahvi ensin ja kulutus myöhemmin.';
+    list.appendChild(note);
   });
 }
 function renderRelativeToMonth(){
